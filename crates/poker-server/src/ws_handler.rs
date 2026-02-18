@@ -53,8 +53,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
 
                 match msg {
                     ClientMessage::CreateRoom {
-                        room_id: ref rid, ..
-                    } => match room_manager.create_room(rid).await {
+                        room_id: ref rid,
+                        blind_config,
+                        ..
+                    } => match room_manager.create_room(rid, blind_config).await {
                         Ok(()) => {
                             let ok = ServerMessage::RoomCreated {
                                 room_id: rid.clone(),
@@ -76,7 +78,14 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                 chips: 1000,
                                 player_count: player_count,
                             };
-                            send_one(&ws_sink, &ServerMessage::RoomJoined { room_id: rid.clone() }).await;
+                            let blind_config = {
+                                let room = rarc.lock().await;
+                                room.blind_config
+                            };
+                            send_one(&ws_sink, &ServerMessage::RoomJoined {
+                                room_id: rid.clone(),
+                                blind_config,
+                            }).await;
                             send_one(&ws_sink, &joined).await;
 
                             // Send the full player list so the newcomer sees existing participants.
@@ -266,6 +275,12 @@ async fn process_client_message(
             }
 
             gs.game_started = true;
+
+            // Initialise the blind increase timer if configured.
+            if gs.blind_config.is_enabled() {
+                gs.last_blind_increase = Some(std::time::Instant::now());
+            }
+
             room.broadcast(&ServerMessage::GameStarted);
 
             // Start first hand.

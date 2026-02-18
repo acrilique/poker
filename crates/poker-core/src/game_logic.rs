@@ -5,9 +5,10 @@
 //! concrete transport.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use crate::poker::{Board, Card, CardSuit, Hand, get_all_cards};
-use crate::protocol::{CardInfo, PlayerAction, ServerMessage};
+use crate::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage};
 use rand::rng;
 use rand::seq::SliceRandom;
 
@@ -101,6 +102,10 @@ pub struct GameState {
     pub first_actor_index: Option<usize>,
     /// Track if current player has acted at least once.
     pub has_acted_this_round: bool,
+    /// Configuration for automatic blind increases.
+    pub blind_config: BlindConfig,
+    /// When blinds were last increased (or when the game started).
+    pub last_blind_increase: Option<Instant>,
 }
 
 impl Default for GameState {
@@ -125,6 +130,8 @@ impl Default for GameState {
             big_blind_option: false,
             first_actor_index: None,
             has_acted_this_round: false,
+            blind_config: BlindConfig::default(),
+            last_blind_increase: None,
         }
     }
 }
@@ -195,6 +202,24 @@ impl GameState {
     /// Start a new hand.
     pub fn start_new_hand(&mut self) -> Vec<ServerMessage> {
         let mut messages = Vec::new();
+
+        // Check if blinds should increase.
+        if self.blind_config.is_enabled() {
+            let should_increase = match self.last_blind_increase {
+                Some(last) => last.elapsed().as_secs() >= self.blind_config.interval_secs,
+                None => false, // first hand — initialised on game start
+            };
+            if should_increase {
+                let pct = self.blind_config.increase_percent;
+                self.small_blind = self.small_blind + (self.small_blind * pct + 99) / 100;
+                self.big_blind = self.big_blind + (self.big_blind * pct + 99) / 100;
+                self.last_blind_increase = Some(Instant::now());
+                messages.push(ServerMessage::BlindsIncreased {
+                    small_blind: self.small_blind,
+                    big_blind: self.big_blind,
+                });
+            }
+        }
 
         self.hand_number += 1;
         self.phase = GamePhase::PreFlop;

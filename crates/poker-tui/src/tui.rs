@@ -795,6 +795,10 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::ConnectionError { message } => format!("❌ Connection error: {}", message),
         GameEvent::Unknown { raw } => format!("📨 {}", raw),
         GameEvent::Text { text, .. } => text.clone(),
+        GameEvent::BlindsIncreased {
+            small_blind,
+            big_blind,
+        } => format!("📈 Blinds increased to {}/{}", small_blind, big_blind),
     }
 }
 

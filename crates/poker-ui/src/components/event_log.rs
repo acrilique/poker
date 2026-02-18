@@ -143,6 +143,13 @@ fn render_event(event: &GameEvent) -> Element {
             category_color(LogCategory::Info),
         ),
         GameEvent::Text { text, category } => (text.clone(), category_color(*category)),
+        GameEvent::BlindsIncreased {
+            small_blind,
+            big_blind,
+        } => (
+            format!("Blinds increased to {small_blind}/{big_blind}"),
+            category_color(LogCategory::System),
+        ),
     };
 
     rsx! {

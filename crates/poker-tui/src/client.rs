@@ -7,7 +7,7 @@
 //! This module is specific to the TUI binary.
 
 use poker_core::client_controller::{ClientController, PollResult};
-use poker_core::protocol::ClientMessage;
+use poker_core::protocol::{BlindConfig, ClientMessage};
 use crate::tui::{Tui, UserIntent};
 
 /// Start the poker client, connecting via WebSocket to the given server/room.
@@ -32,6 +32,7 @@ pub async fn start_client(
     if create {
         ctrl.send(ClientMessage::CreateRoom {
             room_id: room_id.to_string(),
+            blind_config: BlindConfig::default(),
         });
     }
     ctrl.send(ClientMessage::JoinRoom {

@@ -1,7 +1,7 @@
 //! Connection screen — name, server address, room ID, create/join buttons.
 
 use dioxus::prelude::*;
-use poker_core::protocol::validate_room_id;
+use poker_core::protocol::{validate_room_id, BlindConfig};
 
 use crate::UiMessage;
 
@@ -19,6 +19,8 @@ pub fn ConnectionScreen(
     let mut server_url = use_signal(move || default_server.clone());
     let mut room_id = use_signal(|| String::new());
     let mut validation_error = use_signal(|| String::new());
+    let mut blind_interval_mins = use_signal(|| String::new());
+    let mut blind_increase_pct = use_signal(|| String::new());
     let coroutine = use_coroutine_handle::<UiMessage>();
 
     let mut on_submit = move |create: bool| {
@@ -40,12 +42,34 @@ pub fn ConnectionScreen(
             return;
         }
 
+        // Parse blind increase settings (only relevant when creating).
+        let blind_config = if create {
+            let interval_secs = blind_interval_mins
+                .read()
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0)
+                * 60;
+            let increase_percent = blind_increase_pct
+                .read()
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(0);
+            BlindConfig {
+                interval_secs,
+                increase_percent,
+            }
+        } else {
+            BlindConfig::default()
+        };
+
         validation_error.set(String::new());
         coroutine.send(UiMessage::Connect {
             name: n,
             server_url: s,
             room_id: r,
             create,
+            blind_config,
         });
     };
 
@@ -90,6 +114,36 @@ pub fn ConnectionScreen(
                         oninput: move |e| room_id.set(e.value()),
                     }
                     p { class: "text-xs text-gray-500", "Alphanumeric, up to 19 characters" }
+                }
+
+                // Blind increase settings (applies when creating a room)
+                div { class: "flex flex-col gap-2",
+                    label { class: "text-sm text-gray-400", "Blind increases (host only)" }
+                    div { class: "flex gap-2",
+                        div { class: "flex-1 flex flex-col gap-1",
+                            input {
+                                class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
+                                r#type: "number",
+                                min: "0",
+                                placeholder: "Minutes",
+                                value: "{blind_interval_mins}",
+                                oninput: move |e| blind_interval_mins.set(e.value()),
+                            }
+                            p { class: "text-xs text-gray-500", "Interval (min)" }
+                        }
+                        div { class: "flex-1 flex flex-col gap-1",
+                            input {
+                                class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
+                                r#type: "number",
+                                min: "0",
+                                placeholder: "Percent",
+                                value: "{blind_increase_pct}",
+                                oninput: move |e| blind_increase_pct.set(e.value()),
+                            }
+                            p { class: "text-xs text-gray-500", "Increase (%)" }
+                        }
+                    }
+                    p { class: "text-xs text-gray-500", "Leave empty or 0 to keep blinds fixed" }
                 }
 
                 // Validation error

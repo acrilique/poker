@@ -6,7 +6,7 @@
 
 pub mod components;
 
-use poker_core::protocol::ClientMessage;
+use poker_core::protocol::{BlindConfig, ClientMessage};
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -63,6 +63,7 @@ pub enum UiMessage {
         server_url: String,
         room_id: String,
         create: bool,
+        blind_config: BlindConfig,
     },
     /// A game action to forward to the server.
     Action(ClientMessage),

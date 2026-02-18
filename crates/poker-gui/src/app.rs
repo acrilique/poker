@@ -33,15 +33,16 @@ pub fn App() -> Element {
 
         async move {
             // 1. Wait for a Connect message from the connection screen.
-            let (name, server_url, room_id, create) = loop {
+            let (name, server_url, room_id, create, blind_config) = loop {
                 if let Some(UiMessage::Connect {
                     name,
                     server_url,
                     room_id,
                     create,
+                    blind_config,
                 }) = rx.next().await
                 {
-                    break (name, server_url, room_id, create);
+                    break (name, server_url, room_id, create, blind_config);
                 }
             };
 
@@ -66,6 +67,7 @@ pub fn App() -> Element {
             if create {
                 ctrl.send(ClientMessage::CreateRoom {
                     room_id: room_id.clone(),
+                    blind_config,
                 });
             }
             ctrl.send(ClientMessage::JoinRoom {

@@ -84,6 +84,35 @@ impl fmt::Display for PlayerAction {
     }
 }
 
+/// Configuration for automatic blind increases.
+///
+/// When `interval_secs` is 0 (or `None` on the wire) blinds never increase.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlindConfig {
+    /// Seconds between each blind increase (0 = disabled).
+    #[serde(default)]
+    pub interval_secs: u64,
+    /// Percentage by which blinds increase each interval (e.g. 50 = +50%).
+    #[serde(default)]
+    pub increase_percent: u32,
+}
+
+impl Default for BlindConfig {
+    fn default() -> Self {
+        Self {
+            interval_secs: 0,
+            increase_percent: 0,
+        }
+    }
+}
+
+impl BlindConfig {
+    /// Returns `true` when blind increases are enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.interval_secs > 0 && self.increase_percent > 0
+    }
+}
+
 /// Messages sent from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -91,8 +120,12 @@ pub enum ClientMessage {
     /// Join the game with a player name (sent automatically on connect)
     Join { name: String },
 
-    /// Create a new room with the given ID.
-    CreateRoom { room_id: String },
+    /// Create a new room with the given ID and optional blind config.
+    CreateRoom {
+        room_id: String,
+        #[serde(default)]
+        blind_config: BlindConfig,
+    },
 
     /// Join an existing room with the given ID and player name.
     JoinRoom { room_id: String, name: String },
@@ -217,11 +250,21 @@ pub enum ServerMessage {
     /// Game over - tournament finished
     GameOver { winner_id: u32, winner_name: String },
 
+    /// Blinds have increased at the start of a new hand.
+    BlindsIncreased {
+        small_blind: u32,
+        big_blind: u32,
+    },
+
     /// A room was successfully created.
     RoomCreated { room_id: String },
 
     /// Successfully joined a room.
-    RoomJoined { room_id: String },
+    RoomJoined {
+        room_id: String,
+        #[serde(default)]
+        blind_config: BlindConfig,
+    },
 
     /// Room-related error (e.g. "room ID taken", "room not found").
     RoomError { message: String },

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::protocol::{CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
+use crate::protocol::{BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
 
 /// Semantic category for log/event messages. The UI layer decides how to style each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +88,8 @@ pub enum GameEvent {
     Unknown { raw: String },
     /// Generic text message (used by the UI layer for local feedback).
     Text { text: String, category: LogCategory },
+    /// Blinds increased at the start of a new level.
+    BlindsIncreased { small_blind: u32, big_blind: u32 },
 }
 
 impl GameEvent {
@@ -121,6 +123,7 @@ impl GameEvent {
             | Self::Unknown { .. } => LogCategory::Info,
 
             Self::Text { category, .. } => *category,
+            Self::BlindsIncreased { .. } => LogCategory::System,
         }
     }
 }
@@ -189,6 +192,8 @@ pub struct ClientGameState {
     pub our_player_id: u32,
     /// Room ID the player is in
     pub room_id: String,
+    /// Blind increase configuration for this room
+    pub blind_config: BlindConfig,
     /// Connection status
     pub connected: bool,
     /// Game has started
@@ -221,6 +226,7 @@ impl ClientGameState {
             dealer_id: 0,
             our_player_id: 0,
             room_id: String::new(),
+            blind_config: BlindConfig::default(),
             connected: true,
             game_started: false,
         }
@@ -465,13 +471,25 @@ impl ClientGameState {
             ServerMessage::RoomCreated { .. } => {
                 // Handled at the connection-screen level, not game state.
             }
-            ServerMessage::RoomJoined { room_id } => {
+            ServerMessage::RoomJoined { room_id, blind_config } => {
                 self.room_id = room_id.clone();
+                self.blind_config = *blind_config;
             }
             ServerMessage::RoomError { message } => {
                 self.add_event(GameEvent::ServerError {
                     message: message.clone(),
                 });
+            }
+            ServerMessage::BlindsIncreased {
+                small_blind,
+                big_blind,
+            } => {
+                self.big_blind = *big_blind;
+                self.add_event(GameEvent::BlindsIncreased {
+                    small_blind: *small_blind,
+                    big_blind: *big_blind,
+                });
+                changed.phase = true;
             }
         }
 

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use poker_core::game_logic::GameState;
-use poker_core::protocol::{validate_room_id, ServerMessage};
+use poker_core::protocol::{validate_room_id, BlindConfig, ServerMessage};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 /// Handle to a per-player outbound channel.
@@ -24,13 +24,18 @@ pub struct Room {
     pub game_state: Arc<Mutex<GameState>>,
     /// Per-player outbound senders keyed by player ID.
     pub player_senders: HashMap<u32, PlayerTx>,
+    /// Blind increase configuration for this room.
+    pub blind_config: BlindConfig,
 }
 
 impl Room {
-    fn new() -> Self {
+    fn new(blind_config: BlindConfig) -> Self {
+        let mut gs = GameState::new();
+        gs.blind_config = blind_config;
         Self {
-            game_state: Arc::new(Mutex::new(GameState::new())),
+            game_state: Arc::new(Mutex::new(gs)),
             player_senders: HashMap::new(),
+            blind_config,
         }
     }
 
@@ -78,14 +83,14 @@ impl RoomManager {
     /// Create a new room with the given ID.
     ///
     /// Returns an error string if the room ID is invalid or already taken.
-    pub async fn create_room(&self, room_id: &str) -> Result<(), String> {
+    pub async fn create_room(&self, room_id: &str, blind_config: BlindConfig) -> Result<(), String> {
         validate_room_id(room_id)?;
 
         let mut rooms = self.rooms.write().await;
         if rooms.contains_key(room_id) {
             return Err(format!("Room '{}' already exists", room_id));
         }
-        rooms.insert(room_id.to_string(), Arc::new(Mutex::new(Room::new())));
+        rooms.insert(room_id.to_string(), Arc::new(Mutex::new(Room::new(blind_config))));
         Ok(())
     }
 
