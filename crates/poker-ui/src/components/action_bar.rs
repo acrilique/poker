@@ -61,6 +61,13 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                                                 if let Ok(msg) = gs_clone.raise(0, true) {
                                                     coroutine.send(UiMessage::Action(msg));
                                                 }
+                                            } else if mode == StackDisplayMode::Blinds && bb > 0 {
+                                                let bb_val = amount as f64 / bb as f64;
+                                                if bb_val.fract() == 0.0 {
+                                                    raise_input.set(format!("{}", bb_val as u64));
+                                                } else {
+                                                    raise_input.set(format!("{bb_val:.1}"));
+                                                }
                                             } else {
                                                 raise_input.set(amount.to_string());
                                             }
@@ -114,7 +121,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                         input {
                             class: "bg-gray-700 rounded-lg px-3 py-2 text-white w-24 outline-none focus:ring-2 focus:ring-emerald-500",
                             r#type: "number",
-                            placeholder: "Amount",
+                            placeholder: if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "Chips" },
                             value: "{raise_input}",
                             oninput: move |e| raise_input.set(e.value()),
                         }
@@ -123,7 +130,12 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                             onclick: {
                                 let gs_clone = gs.clone();
                                 move |_| {
-                                    let amount: u32 = raise_input.read().parse().unwrap_or(0);
+                                    let raw: f64 = raise_input.read().parse().unwrap_or(0.0);
+                                    let amount: u32 = if mode == StackDisplayMode::Blinds && bb > 0 {
+                                        (raw * bb as f64).round() as u32
+                                    } else {
+                                        raw as u32
+                                    };
                                     match gs_clone.raise(amount, false) {
                                         Ok(msg) => coroutine.send(UiMessage::Action(msg)),
                                         Err(_e) => {} // TODO: show error feedback
