@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use crate::poker::{Board, Hand, HandRank};
 use crate::protocol::{BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
 
 /// Semantic category for log/event messages. The UI layer decides how to style each.
@@ -248,6 +249,28 @@ impl ClientGameState {
     /// Returns true if the given action is currently valid.
     pub fn has_action(&self, action: PlayerAction) -> bool {
         self.valid_actions.contains(&action)
+    }
+
+    /// Evaluate the current best hand rank from the player's hole cards and community cards.
+    ///
+    /// Returns `None` if the player has no hole cards or not enough community
+    /// cards to form a 5-card hand (need at least 3 community cards = flop).
+    pub fn hand_rank(&self) -> Option<HandRank> {
+        let hole = self.hole_cards?;
+        if self.community_cards.len() < 3 {
+            return None;
+        }
+
+        let hand = Hand(hole[0].to_card(), hole[1].to_card());
+        let cc: Vec<_> = self.community_cards.iter().map(|c| c.to_card()).collect();
+
+        let board = Board {
+            flop: Some((cc[0], cc[1], cc[2])),
+            turn: cc.get(3).copied(),
+            river: cc.get(4).copied(),
+        };
+
+        hand.best(&board).map(|fh| fh.rank())
     }
 
     /// Apply a server message to the game state.

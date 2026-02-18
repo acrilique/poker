@@ -50,14 +50,21 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
                 "Pot: {pot_text}"
             }
 
-            // Hole cards
-            div { class: "flex gap-2 mt-2",
-                if let Some(cards) = hole {
-                    card::Card { card: cards[0] }
-                    card::Card { card: cards[1] }
-                } else {
-                    card::CardBack {}
-                    card::CardBack {}
+            // Hole cards + hand rank
+            div { class: "flex flex-col items-center gap-1 mt-2",
+                div { class: "flex gap-2",
+                    if let Some(cards) = hole {
+                        card::Card { card: cards[0] }
+                        card::Card { card: cards[1] }
+                    } else {
+                        card::CardBack {}
+                        card::CardBack {}
+                    }
+                }
+                if let Some(rank) = gs.hand_rank() {
+                    div { class: "text-sm font-medium text-emerald-400 tracking-wide",
+                        "{rank}"
+                    }
                 }
             }
         }

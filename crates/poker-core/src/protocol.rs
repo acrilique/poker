@@ -9,6 +9,35 @@ pub struct CardInfo {
 }
 
 impl CardInfo {
+    /// Convert this wire-level card into an internal [`Card`](crate::poker::Card).
+    pub fn to_card(self) -> crate::poker::Card {
+        use crate::poker::{Card, CardNumber, CardSuit};
+        let number = match self.rank {
+            2 => CardNumber::Two,
+            3 => CardNumber::Three,
+            4 => CardNumber::Four,
+            5 => CardNumber::Five,
+            6 => CardNumber::Six,
+            7 => CardNumber::Seven,
+            8 => CardNumber::Eight,
+            9 => CardNumber::Nine,
+            10 => CardNumber::Ten,
+            11 => CardNumber::Jack,
+            12 => CardNumber::Queen,
+            13 => CardNumber::King,
+            14 => CardNumber::Ace,
+            _ => CardNumber::Two, // fallback
+        };
+        let suit = match self.suit {
+            0 => CardSuit::Diamonds,
+            1 => CardSuit::Spades,
+            2 => CardSuit::Clubs,
+            3 => CardSuit::Hearts,
+            _ => CardSuit::Diamonds, // fallback
+        };
+        Card(number, suit)
+    }
+
     pub fn rank_str(&self) -> &'static str {
         match self.rank {
             2 => "2",
