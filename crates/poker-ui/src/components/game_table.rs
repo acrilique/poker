@@ -14,9 +14,13 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
 
     rsx! {
         div { class: "flex flex-col items-center justify-center h-full gap-6 p-4",
-            // Stage / hand info
-            div { class: "text-gray-400 text-sm tracking-wide uppercase",
-                "Hand #{gs.hand_number}  ·  {gs.stage}"
+            // Room ID + Stage / hand info
+            div { class: "flex items-center gap-4 text-gray-400 text-sm tracking-wide uppercase",
+                div { class: "bg-gray-800 border border-gray-600 rounded px-3 py-1 select-all cursor-pointer",
+                    title: "Room ID — click to select",
+                    "Room: {gs.room_id}"
+                }
+                div { "Hand #{gs.hand_number}  ·  {gs.stage}" }
             }
 
             // Community cards

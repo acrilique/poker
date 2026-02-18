@@ -185,6 +185,8 @@ pub struct ClientGameState {
     pub dealer_id: u32,
     /// Our player ID (assigned by server on join)
     pub our_player_id: u32,
+    /// Room ID the player is in
+    pub room_id: String,
     /// Connection status
     pub connected: bool,
     /// Game has started
@@ -215,6 +217,7 @@ impl ClientGameState {
             stage: "Waiting".to_string(),
             dealer_id: 0,
             our_player_id: 0,
+            room_id: String::new(),
             connected: true,
             game_started: false,
         }
@@ -458,8 +461,8 @@ impl ClientGameState {
             ServerMessage::RoomCreated { .. } => {
                 // Handled at the connection-screen level, not game state.
             }
-            ServerMessage::RoomJoined { .. } => {
-                // Handled at the connection-screen level, not game state.
+            ServerMessage::RoomJoined { room_id } => {
+                self.room_id = room_id.clone();
             }
             ServerMessage::RoomError { message } => {
                 self.add_event(GameEvent::ServerError {
