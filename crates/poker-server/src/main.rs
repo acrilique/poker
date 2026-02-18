@@ -1,14 +1,15 @@
-//! Multi-room Axum poker server.
+//! Combined Axum server: serves the main website + poker WebSocket game.
 //!
 //! # Routes
 //!
-//! | Method | Path            | Description                              |
-//! |--------|-----------------|------------------------------------------|
-//! | `GET`  | `/`             | Serve static web frontend (Dioxus build) |
-//! | `GET`  | `/ws`           | WebSocket upgrade for game connections   |
-//! | `GET`  | `/api/rooms`    | List active room IDs (JSON)              |
+//! | Method | Path            | Description                                |
+//! |--------|-----------------|------------------------------------------- |
+//! | `GET`  | `/ws`           | WebSocket upgrade for game connections     |
+//! | `GET`  | `/api/rooms`    | List active room IDs (JSON)                |
+//! | `GET`  | `/poker/*`      | Poker Dioxus SPA (fallback: poker/index.html) |
+//! | `GET`  | `/*`            | Main site static files (fallback: index.html) |
 //!
-//! Set `STATIC_DIR` to point at the Dioxus web build output (default: `./dist`).
+//! Set `STATIC_DIR` to point at the combined static output (default: `./dist`).
 
 mod room;
 mod ws_handler;
@@ -46,12 +47,15 @@ async fn main() {
         room_manager: Arc::new(RoomManager::new()),
     };
 
-    // Static file directory for the Dioxus web build.
+    // Static file directory for the combined site output.
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "./dist".to_string());
 
-    // Serve the Dioxus SPA: try static files first, fall back to index.html
-    // for client-side routing.
-    let serve_spa = ServeDir::new(&static_dir)
+    // Poker SPA: /poker/* routes, fallback to /poker/index.html for client-side routing.
+    let poker_spa = ServeDir::new(format!("{static_dir}/poker"))
+        .not_found_service(ServeFile::new(format!("{static_dir}/poker/index.html")));
+
+    // Main site: everything else falls back to /index.html.
+    let main_site = ServeDir::new(&static_dir)
         .not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
 
     let app = Router::new()
@@ -59,7 +63,8 @@ async fn main() {
         .route("/api/rooms", get(rooms_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
-        .fallback_service(serve_spa);
+        .nest_service("/poker", poker_spa)
+        .fallback_service(main_site);
 
     let port: u16 = std::env::var("PORT")
         .ok()
