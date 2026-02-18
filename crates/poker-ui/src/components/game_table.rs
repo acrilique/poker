@@ -4,13 +4,18 @@ use dioxus::prelude::*;
 use poker_core::game_state::ClientGameState;
 
 use super::card;
+use crate::{format_stack, StackDisplayMode};
 
 #[component]
 pub fn GameTable(state: Signal<ClientGameState>) -> Element {
     let gs = state.read();
+    let mut display_mode: Signal<StackDisplayMode> = use_context();
+    let mode = *display_mode.read();
+    let bb = gs.big_blind;
 
     let community = &gs.community_cards;
     let hole = gs.hole_cards;
+    let pot_text = format_stack(gs.pot, bb, mode);
 
     rsx! {
         div { class: "flex flex-col items-center justify-center h-full gap-6 p-4",
@@ -35,8 +40,14 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
             }
 
             // Pot
-            div { class: "bg-gray-800 rounded-full px-6 py-2 text-lg font-semibold text-yellow-400 shadow",
-                "Pot: {gs.pot}"
+            div {
+                class: "bg-gray-800 rounded-full px-6 py-2 text-lg font-semibold text-yellow-400 shadow cursor-pointer hover:brightness-125 select-none",
+                title: "Click to toggle chips / BB",
+                onclick: move |_| {
+                    let new_mode = display_mode.read().toggle();
+                    display_mode.set(new_mode);
+                },
+                "Pot: {pot_text}"
             }
 
             // Hole cards

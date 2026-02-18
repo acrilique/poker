@@ -4,13 +4,16 @@ use dioxus::prelude::*;
 use poker_core::game_state::{ClientGameState, RaisePreset, RAISE_PRESETS};
 use poker_core::protocol::PlayerAction;
 
-use crate::UiMessage;
+use crate::{format_stack, StackDisplayMode, UiMessage};
 
 #[component]
 pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
     let gs = state.read();
     let coroutine = use_coroutine_handle::<UiMessage>();
     let mut raise_input = use_signal(|| String::new());
+    let display_mode: Signal<StackDisplayMode> = use_context();
+    let mode = *display_mode.read();
+    let bb = gs.big_blind;
 
     // Only show when it's our turn.
     if !gs.is_our_turn {
@@ -29,6 +32,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
 
     let fold_check_label = if can_check { "Check" } else { "Fold" };
     let call_amount = gs.current_bet.saturating_sub(gs.our_bet);
+    let call_text = format_stack(call_amount, bb, mode);
 
     rsx! {
         div { class: "bg-gray-800 border-t border-gray-700 p-3 flex flex-col gap-2",
@@ -100,7 +104,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                                 }
                             }
                         },
-                        "Call {call_amount}"
+                        "Call {call_text}"
                     }
                 }
 

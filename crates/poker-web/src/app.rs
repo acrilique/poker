@@ -9,7 +9,7 @@ use poker_core::client_controller::{ClientController, PollResult};
 use poker_core::game_state::ClientGameState;
 use poker_core::protocol::ClientMessage;
 use poker_ui::components::{action_bar, connection_screen, event_log, game_table, player_list};
-use poker_ui::{Screen, UiMessage};
+use poker_ui::{Screen, StackDisplayMode, UiMessage};
 
 // ---------------------------------------------------------------------------
 // Root component
@@ -36,6 +36,9 @@ pub fn App() -> Element {
     let game_state = use_signal(|| ClientGameState::new(""));
     let conn_error = use_signal(|| String::new());
     let ws_origin = use_signal(|| default_ws_origin());
+
+    // Shared display mode for stacks (blinds vs chips). Default: blinds.
+    use_context_provider(|| Signal::new(StackDisplayMode::Blinds));
 
     // Spawn the networking coroutine. Components send UiMessage via the handle.
     let _coroutine = use_coroutine(move |mut rx: UnboundedReceiver<UiMessage>| {

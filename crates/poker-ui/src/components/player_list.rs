@@ -4,12 +4,15 @@ use dioxus::prelude::*;
 use poker_core::game_state::ClientGameState;
 use poker_core::protocol::ClientMessage;
 
-use crate::UiMessage;
+use crate::{format_stack, StackDisplayMode, UiMessage};
 
 #[component]
 pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
     let gs = state.read();
     let coroutine = use_coroutine_handle::<UiMessage>();
+    let mut display_mode: Signal<StackDisplayMode> = use_context();
+    let mode = *display_mode.read();
+    let bb = gs.big_blind;
 
     rsx! {
         div { class: "flex flex-col h-full",
@@ -25,6 +28,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_us = player.id == gs.our_player_id;
                         let is_dealer = player.id == gs.dealer_id;
                         let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
+                        let stack_text = format_stack(player.chips, bb, mode);
 
                         rsx! {
                             div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg}",
@@ -34,7 +38,15 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                                     }
                                     span { class: if is_us { "font-semibold text-emerald-300" } else { "text-white" }, "{player.name}" }
                                 }
-                                span { class: "text-gray-400 text-sm", "{player.chips}" }
+                                span {
+                                    class: "text-gray-400 text-sm cursor-pointer hover:text-gray-200 select-none",
+                                    title: "Click to toggle chips / BB",
+                                    onclick: move |_| {
+                                        let new_mode = display_mode.read().toggle();
+                                        display_mode.set(new_mode);
+                                    },
+                                    "{stack_text}"
+                                }
                             }
                         }
                     }

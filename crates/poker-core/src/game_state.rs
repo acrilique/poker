@@ -179,6 +179,8 @@ pub struct ClientGameState {
     pub our_chips: u32,
     /// Our player name
     pub our_name: String,
+    /// Current big blind amount (for display in BB units)
+    pub big_blind: u32,
     /// Game stage (preflop, flop, turn, river)
     pub stage: String,
     /// Dealer ID
@@ -214,6 +216,7 @@ impl ClientGameState {
             min_raise: 0,
             our_chips: 0,
             our_name: name.to_string(),
+            big_blind: 0,
             stage: "Waiting".to_string(),
             dealer_id: 0,
             our_player_id: 0,
@@ -329,6 +332,7 @@ impl ClientGameState {
             } => {
                 self.hand_number = *hand_number;
                 self.dealer_id = *dealer_id;
+                self.big_blind = *big_blind;
                 self.hole_cards = None;
                 self.community_cards.clear();
                 self.pot = small_blind + big_blind;
