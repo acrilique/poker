@@ -447,7 +447,7 @@ async fn process_action(
             }
             gs.pot += raise_total;
             gs.current_bet = new_bet;
-            gs.min_raise = amount;
+            gs.min_raise = gs.big_blind;
             gs.last_raiser_index = Some(gs.current_player_index);
             gs.big_blind_option = false;
             action_amount = Some(raise_total);

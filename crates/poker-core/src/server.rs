@@ -415,7 +415,7 @@ async fn process_betting_action(
             }
             state.pot += raise_total;
             state.current_bet = new_current_bet;
-            state.min_raise = amount;
+            state.min_raise = state.big_blind;
             state.last_raiser_index = Some(state.current_player_index);
             state.big_blind_option = false; // Any raise clears the big blind option
             action_amount = Some(raise_total);
