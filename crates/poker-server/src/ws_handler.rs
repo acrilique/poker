@@ -70,12 +70,13 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                         room_id: ref rid,
                         ref name,
                     } => match room_manager.join_room(rid, name).await {
-                        Ok((pid, player_count, rx, rarc)) => {
+                        Ok((pid, session_token, player_count, rx, rarc)) => {
                             // Send join confirmation to this player.
                             let joined = ServerMessage::JoinedGame {
                                 player_id: pid,
                                 chips: 1000,
                                 player_count,
+                                session_token,
                             };
                             let blind_config = {
                                 let room = rarc.lock().await;
@@ -106,6 +107,29 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                     .collect();
                                 send_one(&ws_sink, &ServerMessage::PlayerList { players }).await;
                             }
+
+                            room_id = Some(rid.clone());
+                            player_id = Some(pid);
+                            player_rx = Some(rx);
+                            room_arc = Some(rarc);
+                            break; // → enter the game loop
+                        }
+                        Err(e) => {
+                            send_one(&ws_sink, &ServerMessage::RoomError { message: e }).await;
+                        }
+                    },
+                    ClientMessage::Rejoin {
+                        room_id: ref rid,
+                        ref session_token,
+                    } => match room_manager.rejoin_room(rid, session_token).await {
+                        Ok((pid, rx, rarc)) => {
+                            // Build and send a full state snapshot.
+                            let snapshot = {
+                                let room = rarc.lock().await;
+                                let gs = room.game_state.lock().await;
+                                room.build_rejoin_snapshot(&gs, rid, pid, session_token)
+                            };
+                            send_one(&ws_sink, &snapshot).await;
 
                             room_id = Some(rid.clone());
                             player_id = Some(pid);
@@ -185,7 +209,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
 
     // ── Cleanup ──────────────────────────────────────────────────────────
     write_handle.abort();
-    room_manager.remove_player(&rid, pid).await;
+    room_manager.disconnect_player(&rid, pid).await;
     tracing::info!(room = %rid, player = pid, "Player disconnected");
 }
 
@@ -211,7 +235,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         // ── Join / room ops are no-ops once in a room ────────────────
         ClientMessage::Join { .. }
         | ClientMessage::CreateRoom { .. }
-        | ClientMessage::JoinRoom { .. } => {
+        | ClientMessage::JoinRoom { .. }
+        | ClientMessage::Rejoin { .. } => {
             let room = room_arc.lock().await;
             room.send_to_player(
                 player_id,

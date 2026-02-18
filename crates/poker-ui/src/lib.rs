@@ -67,4 +67,6 @@ pub enum UiMessage {
     },
     /// A game action to forward to the server.
     Action(ClientMessage),
+    /// Deliberately exit the current game / room.
+    ExitGame,
 }

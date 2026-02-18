@@ -80,11 +80,10 @@ pub fn App() -> Element {
                 match ctrl.recv().await {
                     PollResult::Updated(changed) => {
                         game_state.set(ctrl.state.clone());
-                        if (changed.phase || changed.players)
-                            && ctrl.state.our_player_id != 0 {
-                                screen.set(Screen::Game);
-                                break;
-                            }
+                        if (changed.phase || changed.players) && ctrl.state.our_player_id != 0 {
+                            screen.set(Screen::Game);
+                            break;
+                        }
                     }
                     PollResult::Unknown => {}
                     PollResult::Error | PollResult::Disconnected => {
@@ -115,6 +114,11 @@ pub fn App() -> Element {
                         match msg {
                             Some(UiMessage::Action(client_msg)) => {
                                 ctrl.send(client_msg);
+                            }
+                            Some(UiMessage::ExitGame) => {
+                                screen.set(Screen::Connection);
+                                game_state.set(ClientGameState::new(""));
+                                break;
                             }
                             Some(UiMessage::Connect { .. }) => {
                                 // Ignore duplicate connect requests.

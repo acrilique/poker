@@ -71,9 +71,10 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                 }
             }
 
-            // Start game button (visible in lobby when game hasn't started)
-            if !gs.game_started {
-                div { class: "p-3 border-t border-gray-700",
+            // Bottom controls: Start / Sit Out / Exit
+            div { class: "p-3 border-t border-gray-700 flex flex-col gap-2",
+                // Start game button (lobby only)
+                if !gs.game_started {
                     button {
                         class: "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg py-2 transition",
                         onclick: move |_| {
@@ -81,6 +82,40 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         },
                         "Start Game"
                     }
+                }
+
+                // Sit Out / Sit In toggle (visible once game has started)
+                if gs.game_started {
+                    {
+                        let is_sitting_out = gs.is_sitting_out();
+                        let (label, btn_class) = if is_sitting_out {
+                            ("Sit In", "w-full bg-emerald-600 hover:bg-emerald-500 rounded-lg py-1.5 text-sm font-semibold text-white transition")
+                        } else {
+                            ("Sit Out", "w-full bg-gray-600 hover:bg-gray-500 rounded-lg py-1.5 text-sm font-semibold text-white transition")
+                        };
+                        rsx! {
+                            button {
+                                class: "{btn_class}",
+                                onclick: move |_| {
+                                    if is_sitting_out {
+                                        coroutine.send(UiMessage::Action(ClientMessage::SitIn));
+                                    } else {
+                                        coroutine.send(UiMessage::Action(ClientMessage::SitOut));
+                                    }
+                                },
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+
+                // Exit game button (always visible)
+                button {
+                    class: "w-full bg-red-700 hover:bg-red-600 rounded-lg py-1.5 text-sm font-semibold text-white transition",
+                    onclick: move |_| {
+                        coroutine.send(UiMessage::ExitGame);
+                    },
+                    "Exit Game"
                 }
             }
         }

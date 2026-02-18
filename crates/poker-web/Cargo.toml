@@ -15,4 +15,5 @@ poker-ui = { path = "../poker-ui" }
 dioxus = { version = "0.7", features = ["web"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "macros"] }
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
+gloo-timers = { version = "0.3", features = ["futures"] }

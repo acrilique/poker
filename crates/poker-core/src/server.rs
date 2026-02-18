@@ -295,8 +295,15 @@ async fn process_message(
 
         // Room management is handled by the new Axum server (poker-server).
         // The legacy TCP server does not support rooms.
-        ClientMessage::CreateRoom { .. } | ClientMessage::JoinRoom { .. } => ServerMessage::Error {
+        ClientMessage::CreateRoom { .. }
+        | ClientMessage::JoinRoom { .. }
+        | ClientMessage::Rejoin { .. } => ServerMessage::Error {
             message: "Room management is not supported by the legacy TCP server".to_string(),
+        },
+
+        // Sit-out is not supported by the legacy TCP server.
+        ClientMessage::SitOut | ClientMessage::SitIn => ServerMessage::Error {
+            message: "Sit-out is not supported by the legacy TCP server".to_string(),
         },
     }
 }

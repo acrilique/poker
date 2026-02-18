@@ -116,8 +116,7 @@ impl fmt::Display for PlayerAction {
 /// Configuration for automatic blind increases.
 ///
 /// When `interval_secs` is 0 (or `None` on the wire) blinds never increase.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct BlindConfig {
     /// Seconds between each blind increase (0 = disabled).
     #[serde(default)]
@@ -126,7 +125,6 @@ pub struct BlindConfig {
     #[serde(default)]
     pub increase_percent: u32,
 }
-
 
 impl BlindConfig {
     /// Returns `true` when blind increases are enabled.
@@ -182,6 +180,12 @@ pub enum ClientMessage {
     /// Request to sit back in.
     SitIn,
 
+    /// Re-join a room after a disconnect using a previously issued session token.
+    Rejoin {
+        room_id: String,
+        session_token: String,
+    },
+
     /// Ping to check connection
     Ping,
 }
@@ -198,6 +202,9 @@ pub enum ServerMessage {
         player_id: u32,
         chips: u32,
         player_count: usize,
+        /// Session token for reconnection after a disconnect.
+        #[serde(default)]
+        session_token: String,
     },
 
     /// A new player joined
@@ -300,6 +307,29 @@ pub enum ServerMessage {
         room_id: String,
         #[serde(default)]
         blind_config: BlindConfig,
+    },
+
+    /// Full state snapshot sent on successful rejoin.
+    Rejoined {
+        room_id: String,
+        player_id: u32,
+        session_token: String,
+        chips: u32,
+        game_started: bool,
+        hand_number: u32,
+        pot: u32,
+        stage: String,
+        community_cards: Vec<CardInfo>,
+        hole_cards: Option<[CardInfo; 2]>,
+        players: Vec<PlayerInfo>,
+        sitting_out: Vec<u32>,
+        #[serde(default)]
+        blind_config: BlindConfig,
+        dealer_id: u32,
+        small_blind_id: u32,
+        big_blind_id: u32,
+        small_blind: u32,
+        big_blind: u32,
     },
 
     /// Room-related error (e.g. "room ID taken", "room not found").

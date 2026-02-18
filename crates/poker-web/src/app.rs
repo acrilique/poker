@@ -2,11 +2,16 @@
 //!
 //! Connects to the poker server via WebSocket, manages game state,
 //! and routes between connection and game screens.
+//!
+//! Supports automatic session recovery: when a player disconnects (network
+//! drop or page reload) the server holds their seat for several minutes.
+//! The client persists the session token in `sessionStorage` and attempts
+//! to rejoin transparently on reconnect.
 
 use dioxus::prelude::*;
 use futures_util::StreamExt;
 use poker_core::client_controller::{ClientController, PollResult};
-use poker_core::game_state::ClientGameState;
+use poker_core::game_state::{ClientGameState, LogCategory};
 use poker_core::protocol::ClientMessage;
 use poker_ui::components::{action_bar, connection_screen, event_log, game_table, player_list};
 use poker_ui::{Screen, StackDisplayMode, UiMessage};
@@ -16,6 +21,49 @@ use poker_ui::{Screen, StackDisplayMode, UiMessage};
 // ---------------------------------------------------------------------------
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+
+/// Maximum number of automatic reconnection attempts before giving up.
+const MAX_RECONNECT_ATTEMPTS: u32 = 5;
+
+/// Base delay between reconnection attempts (doubles each attempt).
+const RECONNECT_BASE_DELAY_MS: u64 = 1_000;
+
+// ---------------------------------------------------------------------------
+// Session persistence helpers (sessionStorage)
+// ---------------------------------------------------------------------------
+
+fn save_session(ws_url: &str, room_id: &str, name: &str, session_token: &str) {
+    let window = web_sys::window().unwrap();
+    if let Ok(Some(storage)) = window.session_storage() {
+        let _ = storage.set_item("poker_ws_url", ws_url);
+        let _ = storage.set_item("poker_room_id", room_id);
+        let _ = storage.set_item("poker_name", name);
+        let _ = storage.set_item("poker_session_token", session_token);
+    }
+}
+
+fn load_session() -> Option<(String, String, String, String)> {
+    let window = web_sys::window()?;
+    let storage = window.session_storage().ok()??;
+    let ws_url = storage.get_item("poker_ws_url").ok()??;
+    let room_id = storage.get_item("poker_room_id").ok()??;
+    let name = storage.get_item("poker_name").ok()??;
+    let token = storage.get_item("poker_session_token").ok()??;
+    if token.is_empty() {
+        return None;
+    }
+    Some((ws_url, room_id, name, token))
+}
+
+fn clear_session() {
+    let window = web_sys::window().unwrap();
+    if let Ok(Some(storage)) = window.session_storage() {
+        let _ = storage.remove_item("poker_ws_url");
+        let _ = storage.remove_item("poker_room_id");
+        let _ = storage.remove_item("poker_name");
+        let _ = storage.remove_item("poker_session_token");
+    }
+}
 
 /// Derive the WebSocket URL from the browser's current page origin.
 ///
@@ -27,6 +75,93 @@ fn default_ws_origin() -> String {
     let host = location.host().unwrap_or_default();
     let ws_scheme = if protocol == "https:" { "wss" } else { "ws" };
     format!("{ws_scheme}://{host}")
+}
+
+// ---------------------------------------------------------------------------
+// Reconnection helper
+// ---------------------------------------------------------------------------
+
+/// Attempt to rejoin using a saved session. Returns a connected controller
+/// on success, or `None` if the session is invalid / expired.
+async fn try_rejoin(
+    ws_url: &str,
+    room_id: &str,
+    name: &str,
+    session_token: &str,
+) -> Option<ClientController> {
+    let mut ctrl = ClientController::connect_ws(ws_url, name).await.ok()?;
+    ctrl.send(ClientMessage::Rejoin {
+        room_id: room_id.to_string(),
+        session_token: session_token.to_string(),
+    });
+
+    // Wait for Rejoined or an error.
+    loop {
+        match ctrl.recv().await {
+            PollResult::Updated(changed) => {
+                if changed.players || changed.phase {
+                    // Rejoined triggers players + phase change.
+                    if ctrl.state.our_player_id != 0 && !ctrl.state.room_id.is_empty() {
+                        return Some(ctrl);
+                    }
+                }
+                // Check if the latest event is an error (session expired).
+                if let Some(ev) = ctrl.state.events.back()
+                    && matches!(ev, poker_core::game_state::GameEvent::ServerError { .. }) {
+                        return None;
+                    }
+            }
+            PollResult::Error | PollResult::Disconnected => return None,
+            _ => {}
+        }
+    }
+}
+
+/// Why the game loop ended.
+enum GameLoopExit {
+    /// Connection dropped (network error, server closed, etc.).
+    Disconnected,
+    /// User deliberately chose to exit the game.
+    UserExit,
+}
+
+/// Run the main game loop, returning when the connection drops or the user exits.
+async fn game_loop(
+    ctrl: &mut ClientController,
+    rx: &mut UnboundedReceiver<UiMessage>,
+    game_state: &mut Signal<ClientGameState>,
+) -> GameLoopExit {
+    loop {
+        tokio::select! {
+            poll = ctrl.recv() => {
+                match poll {
+                    PollResult::Updated(_changed) => {
+                        game_state.set(ctrl.state.clone());
+                    }
+                    PollResult::Unknown => {}
+                    PollResult::Error | PollResult::Disconnected => {
+                        game_state.set(ctrl.state.clone());
+                        return GameLoopExit::Disconnected;
+                    }
+                    PollResult::Empty => {}
+                }
+            }
+            msg = rx.next() => {
+                match msg {
+                    Some(UiMessage::Action(client_msg)) => {
+                        ctrl.send(client_msg);
+                    }
+                    Some(UiMessage::ExitGame) => {
+                        return GameLoopExit::UserExit;
+                    }
+                    Some(UiMessage::Connect { .. }) => {
+                        // Ignore duplicate connect requests.
+                    }
+                    None => return GameLoopExit::Disconnected,
+                }
+            }
+        }
+    }
 }
 
 /// Root `<App>` component.
@@ -47,7 +182,33 @@ pub fn App() -> Element {
         let mut conn_error = conn_error;
 
         async move {
-            // 1. Wait for a Connect message from the connection screen.
+            // ── Check for a saved session from a previous page load ──────
+            if let Some((ws_url, room_id, name, session_token)) = load_session() {
+                if let Some(mut ctrl) = try_rejoin(&ws_url, &room_id, &name, &session_token).await {
+                    // Update the session token (may have been refreshed).
+                    save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
+                    game_state.set(ctrl.state.clone());
+                    screen.set(Screen::Game);
+
+                    // Enter the game loop with reconnection support.
+                    run_with_reconnect(
+                        &mut ctrl,
+                        &mut rx,
+                        &mut game_state,
+                        &mut screen,
+                        &ws_url,
+                        &room_id,
+                        &name,
+                    )
+                    .await;
+                    clear_session();
+                    return;
+                } else {
+                    clear_session();
+                }
+            }
+
+            // ── Normal flow: wait for a Connect message ──────────────────
             let (name, server_url, room_id, create, blind_config) = loop {
                 if let Some(UiMessage::Connect {
                     name,
@@ -61,7 +222,7 @@ pub fn App() -> Element {
                 }
             };
 
-            // 2. Build WS URL and attempt connection.
+            // Build WS URL and attempt connection.
             conn_error.set(String::new());
             let ws_url = format!("{server_url}/ws");
             let result = ClientController::connect_ws(&ws_url, &name).await;
@@ -74,7 +235,7 @@ pub fn App() -> Element {
                 }
             };
 
-            // 3. Send CreateRoom (if requested) then JoinRoom.
+            // Send CreateRoom (if requested) then JoinRoom.
             if create {
                 ctrl.send(ClientMessage::CreateRoom {
                     room_id: room_id.clone(),
@@ -86,20 +247,18 @@ pub fn App() -> Element {
                 name: name.clone(),
             });
 
-            // 4. Wait for room confirmation before switching to game screen.
-            //    Process events until we get RoomJoined, RoomError, or disconnect.
+            // Wait for room confirmation before switching to game screen.
             loop {
                 match ctrl.recv().await {
                     PollResult::Updated(changed) => {
                         game_state.set(ctrl.state.clone());
-                        // Check for room-related responses in the latest events.
-                        if changed.phase || changed.players {
-                            // JoinedGame triggers players change — we're in.
-                            if ctrl.state.our_player_id != 0 {
+                        if (changed.phase || changed.players)
+                            && ctrl.state.our_player_id != 0 {
+                                // Persist session for reconnection.
+                                save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
                                 screen.set(Screen::Game);
                                 break;
                             }
-                        }
                     }
                     PollResult::Unknown => {}
                     PollResult::Error | PollResult::Disconnected => {
@@ -110,35 +269,18 @@ pub fn App() -> Element {
                 }
             }
 
-            // 5. Main event loop: network events + UI actions.
-            loop {
-                tokio::select! {
-                    poll = ctrl.recv() => {
-                        match poll {
-                            PollResult::Updated(_changed) => {
-                                game_state.set(ctrl.state.clone());
-                            }
-                            PollResult::Unknown => {}
-                            PollResult::Error | PollResult::Disconnected => {
-                                game_state.set(ctrl.state.clone());
-                                break;
-                            }
-                            PollResult::Empty => {}
-                        }
-                    }
-                    msg = rx.next() => {
-                        match msg {
-                            Some(UiMessage::Action(client_msg)) => {
-                                ctrl.send(client_msg);
-                            }
-                            Some(UiMessage::Connect { .. }) => {
-                                // Ignore duplicate connect requests.
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
+            // Main game loop with reconnection support.
+            run_with_reconnect(
+                &mut ctrl,
+                &mut rx,
+                &mut game_state,
+                &mut screen,
+                &ws_url,
+                &room_id,
+                &name,
+            )
+            .await;
+            clear_session();
         }
     });
 
@@ -173,6 +315,81 @@ pub fn App() -> Element {
                     }
                 },
             }
+        }
+    }
+}
+
+/// Run the game loop with automatic reconnection on disconnect.
+///
+/// When the WebSocket drops, this function will attempt up to
+/// [`MAX_RECONNECT_ATTEMPTS`] to rejoin using the saved session token,
+/// with exponential back-off between attempts.
+async fn run_with_reconnect(
+    ctrl: &mut ClientController,
+    rx: &mut UnboundedReceiver<UiMessage>,
+    game_state: &mut Signal<ClientGameState>,
+    screen: &mut Signal<Screen>,
+    ws_url: &str,
+    room_id: &str,
+    name: &str,
+) {
+    loop {
+        // Run the normal game loop until disconnect or user exit.
+        match game_loop(ctrl, rx, game_state).await {
+            GameLoopExit::UserExit => {
+                // User deliberately exited — no reconnection.
+                clear_session();
+                screen.set(Screen::Connection);
+                *game_state.write() = ClientGameState::new(name);
+                return;
+            }
+            GameLoopExit::Disconnected => {
+                // Fall through to reconnection logic below.
+            }
+        }
+
+        // Disconnected — try to rejoin.
+        let session_token = ctrl.state.session_token.clone();
+        if session_token.is_empty() {
+            break; // No session token, can't reconnect.
+        }
+
+        ctrl.state.add_message(
+            "Connection lost. Attempting to reconnect…".to_string(),
+            LogCategory::System,
+        );
+        game_state.set(ctrl.state.clone());
+
+        let mut reconnected = false;
+        for attempt in 0..MAX_RECONNECT_ATTEMPTS {
+            let delay = RECONNECT_BASE_DELAY_MS * 2u64.pow(attempt);
+            gloo_timers::future::TimeoutFuture::new(delay as u32).await;
+
+            ctrl.state.add_message(
+                format!(
+                    "Reconnection attempt {} of {MAX_RECONNECT_ATTEMPTS}…",
+                    attempt + 1
+                ),
+                LogCategory::System,
+            );
+            game_state.set(ctrl.state.clone());
+
+            if let Some(new_ctrl) = try_rejoin(ws_url, room_id, name, &session_token).await {
+                *ctrl = new_ctrl;
+                save_session(ws_url, room_id, name, &ctrl.state.session_token);
+                game_state.set(ctrl.state.clone());
+                reconnected = true;
+                break;
+            }
+        }
+
+        if !reconnected {
+            ctrl.state.add_message(
+                "Could not reconnect. Session may have expired.".to_string(),
+                LogCategory::Error,
+            );
+            game_state.set(ctrl.state.clone());
+            break;
         }
     }
 }

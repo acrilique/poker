@@ -63,7 +63,6 @@ struct TuiState {
     show_help: bool,
 }
 
-
 impl TuiState {
     fn move_cursor_left(&mut self) {
         let cursor_moved_left = self.raise_cursor.saturating_sub(1);

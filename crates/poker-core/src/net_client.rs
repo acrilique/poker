@@ -51,13 +51,15 @@ pub fn parse_server_line(line: &str, our_player_id: u32) -> ServerLine {
     if trimmed.starts_with("PRIVATE:") {
         let parts: Vec<&str> = trimmed.splitn(3, ':').collect();
         if parts.len() == 3
-            && let Ok(target_id) = parts[1].parse::<u32>() {
-                if (our_player_id == 0 || target_id == our_player_id)
-                    && let Ok(msg) = serde_json::from_str::<ServerMessage>(parts[2]) {
-                        return ServerLine::Message(msg);
-                    }
-                return ServerLine::NotForUs;
+            && let Ok(target_id) = parts[1].parse::<u32>()
+        {
+            if (our_player_id == 0 || target_id == our_player_id)
+                && let Ok(msg) = serde_json::from_str::<ServerMessage>(parts[2])
+            {
+                return ServerLine::Message(msg);
             }
+            return ServerLine::NotForUs;
+        }
         return ServerLine::Unknown(trimmed.to_string());
     }
 

@@ -232,6 +232,8 @@ pub struct ClientGameState {
     pub turn_timer_secs: u32,
     /// Set of player IDs currently sitting out.
     pub sitting_out_players: HashSet<u32>,
+    /// Session token for reconnection after a disconnect.
+    pub session_token: String,
 }
 
 impl ClientGameState {
@@ -269,6 +271,7 @@ impl ClientGameState {
             turn_timer_player: None,
             turn_timer_secs: 0,
             sitting_out_players: HashSet::new(),
+            session_token: String::new(),
         }
     }
 
@@ -348,9 +351,13 @@ impl ClientGameState {
                 player_id,
                 chips,
                 player_count,
+                session_token,
             } => {
                 self.our_player_id = *player_id;
                 self.our_chips = *chips;
+                if !session_token.is_empty() {
+                    self.session_token = session_token.clone();
+                }
                 if !self.players.iter().any(|p| p.id == *player_id) {
                     self.players.push(PlayerInfo {
                         id: *player_id,
@@ -589,6 +596,52 @@ impl ClientGameState {
             } => {
                 self.room_id = room_id.clone();
                 self.blind_config = *blind_config;
+            }
+            ServerMessage::Rejoined {
+                room_id,
+                player_id,
+                session_token,
+                chips,
+                game_started,
+                hand_number,
+                pot,
+                stage,
+                community_cards,
+                hole_cards,
+                players,
+                sitting_out,
+                blind_config,
+                dealer_id,
+                small_blind_id,
+                big_blind_id,
+                small_blind: _,
+                big_blind,
+            } => {
+                self.room_id = room_id.clone();
+                self.our_player_id = *player_id;
+                self.session_token = session_token.clone();
+                self.our_chips = *chips;
+                self.game_started = *game_started;
+                self.hand_number = *hand_number;
+                self.pot = *pot;
+                self.stage = stage.clone();
+                self.community_cards = community_cards.clone();
+                self.hole_cards = *hole_cards;
+                self.players = players.clone();
+                self.sitting_out_players = sitting_out.iter().copied().collect();
+                self.blind_config = *blind_config;
+                self.big_blind = *big_blind;
+                self.dealer_id = *dealer_id;
+                self.small_blind_id = *small_blind_id;
+                self.big_blind_id = *big_blind_id;
+                self.connected = true;
+                self.is_our_turn = false;
+                self.valid_actions.clear();
+                self.add_message("Reconnected to game.".to_string(), LogCategory::System);
+                changed.players = true;
+                changed.cards = true;
+                changed.pot = true;
+                changed.phase = true;
             }
             ServerMessage::RoomError { message } => {
                 self.add_event(GameEvent::ServerError {
