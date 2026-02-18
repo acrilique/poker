@@ -189,6 +189,10 @@ pub struct ClientGameState {
     pub stage: String,
     /// Dealer ID
     pub dealer_id: u32,
+    /// Small blind player ID
+    pub small_blind_id: u32,
+    /// Big blind player ID
+    pub big_blind_id: u32,
     /// Our player ID (assigned by server on join)
     pub our_player_id: u32,
     /// Room ID the player is in
@@ -225,6 +229,8 @@ impl ClientGameState {
             big_blind: 0,
             stage: "Waiting".to_string(),
             dealer_id: 0,
+            small_blind_id: 0,
+            big_blind_id: 0,
             our_player_id: 0,
             room_id: String::new(),
             blind_config: BlindConfig::default(),
@@ -361,6 +367,8 @@ impl ClientGameState {
             } => {
                 self.hand_number = *hand_number;
                 self.dealer_id = *dealer_id;
+                self.small_blind_id = *small_blind_id;
+                self.big_blind_id = *big_blind_id;
                 self.big_blind = *big_blind;
                 self.hole_cards = None;
                 self.community_cards.clear();

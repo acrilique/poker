@@ -26,15 +26,19 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                 for player in gs.players.iter() {
                     {
                         let is_us = player.id == gs.our_player_id;
-                        let is_dealer = player.id == gs.dealer_id;
+                        let is_sb = player.id == gs.small_blind_id;
+                        let is_bb = player.id == gs.big_blind_id;
                         let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
                         let stack_text = format_stack(player.chips, bb, mode);
 
                         rsx! {
                             div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg}",
                                 div { class: "flex items-center gap-2",
-                                    if is_dealer {
-                                        span { class: "text-yellow-400 text-xs font-bold", "D" }
+                                    if is_sb {
+                                        span { class: "text-yellow-400 text-xs font-bold", "SB" }
+                                    }
+                                    if is_bb {
+                                        span { class: "text-blue-400 text-xs font-bold", "BB" }
                                     }
                                     span { class: if is_us { "font-semibold text-emerald-300" } else { "text-white" }, "{player.name}" }
                                 }
