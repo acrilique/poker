@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::poker::{Board, Hand, HandRank};
 use crate::protocol::{BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
@@ -203,6 +203,10 @@ pub struct ClientGameState {
     pub connected: bool,
     /// Game has started
     pub game_started: bool,
+    /// Per-player total bet amounts for the current hand.
+    /// Tracks chips invested since the last `NewHand` so the UI can show
+    /// effective stacks (stack minus bet) alongside the bet.
+    pub player_bets: HashMap<u32, u32>,
 }
 
 impl ClientGameState {
@@ -236,6 +240,7 @@ impl ClientGameState {
             blind_config: BlindConfig::default(),
             connected: true,
             game_started: false,
+            player_bets: HashMap::new(),
         }
     }
 
@@ -375,6 +380,10 @@ impl ClientGameState {
                 self.pot = small_blind + big_blind;
                 self.stage = "Preflop".to_string();
                 self.is_our_turn = false;
+                // Reset per-player bets and record blind postings.
+                self.player_bets.clear();
+                self.player_bets.insert(*small_blind_id, *small_blind);
+                self.player_bets.insert(*big_blind_id, *big_blind);
                 self.add_event(GameEvent::NewHand {
                     hand_number: *hand_number,
                     dealer_id: *dealer_id,
@@ -427,11 +436,16 @@ impl ClientGameState {
                 if *player_id == self.our_player_id {
                     self.is_our_turn = false;
                 }
+                // Track the chips this player put in during this action.
+                if let Some(a) = amount {
+                    *self.player_bets.entry(*player_id).or_insert(0) += a;
+                }
                 self.add_event(GameEvent::PlayerActed {
                     player_id: *player_id,
                     action: *action,
                     amount: *amount,
                 });
+                changed.players = true;
             }
             ServerMessage::PotUpdate { pot } => {
                 self.pot = *pot;
@@ -444,6 +458,8 @@ impl ClientGameState {
                 if let Some(p) = self.players.iter_mut().find(|p| p.id == *player_id) {
                     p.chips = *chips;
                 }
+                // Chips have been reconciled by the server; clear tracked bet.
+                self.player_bets.remove(player_id);
                 changed.players = true;
             }
             ServerMessage::Showdown { hands } => {

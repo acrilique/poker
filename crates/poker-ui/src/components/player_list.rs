@@ -29,7 +29,12 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_sb = player.id == gs.small_blind_id;
                         let is_bb = player.id == gs.big_blind_id;
                         let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
-                        let stack_text = format_stack(player.chips, bb, mode);
+
+                        // Compute effective stack (chips minus current bet) and bet amount.
+                        let bet = gs.player_bets.get(&player.id).copied().unwrap_or(0).min(player.chips);
+                        let effective_chips = player.chips.saturating_sub(bet);
+                        let stack_text = format_stack(effective_chips, bb, mode);
+                        let bet_text = if bet > 0 { Some(format_stack(bet, bb, mode)) } else { None };
 
                         rsx! {
                             div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg}",
@@ -42,14 +47,17 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                                     }
                                     span { class: if is_us { "font-semibold text-emerald-300" } else { "text-white" }, "{player.name}" }
                                 }
-                                span {
-                                    class: "text-gray-400 text-sm cursor-pointer hover:text-gray-200 select-none",
+                                div {
+                                    class: "flex items-center gap-1.5 cursor-pointer select-none",
                                     title: "Click to toggle chips / BB",
                                     onclick: move |_| {
                                         let new_mode = display_mode.read().toggle();
                                         display_mode.set(new_mode);
                                     },
-                                    "{stack_text}"
+                                    span { class: "text-gray-400 text-sm hover:text-gray-200", "{stack_text}" }
+                                    if let Some(bt) = &bet_text {
+                                        span { class: "text-amber-400 text-sm font-medium", "+{bt}" }
+                                    }
                                 }
                             }
                         }
