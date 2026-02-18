@@ -31,8 +31,8 @@ fn render_event(event: &GameEvent) -> Element {
             format!("{name} joined the game"),
             category_color(LogCategory::Info),
         ),
-        GameEvent::PlayerLeft { player_id } => (
-            format!("Player #{player_id} left"),
+        GameEvent::PlayerLeft { name, .. } => (
+            format!("{name} left"),
             category_color(LogCategory::Info),
         ),
         GameEvent::Chat {
@@ -72,22 +72,23 @@ fn render_event(event: &GameEvent) -> Element {
             category_color(LogCategory::System),
         ),
         GameEvent::PlayerActed {
-            player_id,
+            name,
             action,
             amount,
+            ..
         } => {
             let amt = amount
                 .map(|a| format!(" ({a})"))
                 .unwrap_or_default();
             (
-                format!("Player #{player_id} {action}{amt}"),
+                format!("{name} {action}{amt}"),
                 category_color(LogCategory::Action),
             )
         }
         GameEvent::Showdown { hands } => {
             let lines: Vec<String> = hands
                 .iter()
-                .map(|(id, cards, hand)| format!("  #{id}: {} {} — {hand}", cards[0], cards[1]))
+                .map(|(_id, name, cards, hand)| format!("  {name}: {} {} — {hand}", cards[0], cards[1]))
                 .collect();
             (
                 format!("Showdown:\n{}", lines.join("\n")),
@@ -97,8 +98,8 @@ fn render_event(event: &GameEvent) -> Element {
         GameEvent::AllInShowdown { hands } => {
             let lines: Vec<String> = hands
                 .iter()
-                .map(|(id, cards, eq)| {
-                    format!("  #{id}: {} {} — {:.1}%", cards[0], cards[1], eq * 100.0)
+                .map(|(_id, name, cards, eq)| {
+                    format!("  {name}: {} {} — {:.1}%", cards[0], cards[1], eq * 100.0)
                 })
                 .collect();
             (
@@ -107,15 +108,16 @@ fn render_event(event: &GameEvent) -> Element {
             )
         }
         GameEvent::RoundWinner {
-            player_id,
+            name,
             amount,
             hand,
+            ..
         } => (
-            format!("Player #{player_id} wins {amount} ({hand})"),
+            format!("{name} wins {amount} ({hand})"),
             category_color(LogCategory::Winner),
         ),
-        GameEvent::PlayerEliminated { player_id } => (
-            format!("Player #{player_id} eliminated"),
+        GameEvent::PlayerEliminated { name, .. } => (
+            format!("{name} eliminated"),
             category_color(LogCategory::Info),
         ),
         GameEvent::GameOver {
@@ -150,16 +152,16 @@ fn render_event(event: &GameEvent) -> Element {
             format!("Blinds increased to {small_blind}/{big_blind}"),
             category_color(LogCategory::System),
         ),
-        GameEvent::TurnTimerStarted { player_id, timeout_secs } => (
-            format!("Player {player_id} has {timeout_secs}s to act"),
+        GameEvent::TurnTimerStarted { name, timeout_secs, .. } => (
+            format!("{name} has {timeout_secs}s to act"),
             category_color(LogCategory::System),
         ),
-        GameEvent::PlayerSatOut { player_id } => (
-            format!("Player #{player_id} is sitting out"),
+        GameEvent::PlayerSatOut { name, .. } => (
+            format!("{name} is sitting out"),
             category_color(LogCategory::Info),
         ),
-        GameEvent::PlayerSatIn { player_id } => (
-            format!("Player #{player_id} is back in"),
+        GameEvent::PlayerSatIn { name, .. } => (
+            format!("{name} is back in"),
             category_color(LogCategory::Info),
         ),
     };

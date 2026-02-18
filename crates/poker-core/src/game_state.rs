@@ -29,7 +29,7 @@ pub enum GameEvent {
     /// Another player joined.
     PlayerJoined { player_id: u32, name: String },
     /// A player left.
-    PlayerLeft { player_id: u32 },
+    PlayerLeft { player_id: u32, name: String },
     /// Chat message from a player.
     Chat {
         player_id: u32,
@@ -56,25 +56,27 @@ pub enum GameEvent {
     /// A player performed an action.
     PlayerActed {
         player_id: u32,
+        name: String,
         action: PlayerAction,
         amount: Option<u32>,
     },
     /// Showdown — reveal hands.
     Showdown {
-        hands: Vec<(u32, [CardInfo; 2], String)>,
+        hands: Vec<(u32, String, [CardInfo; 2], String)>,
     },
     /// All-in showdown with equity.
     AllInShowdown {
-        hands: Vec<(u32, [CardInfo; 2], f64)>,
+        hands: Vec<(u32, String, [CardInfo; 2], f64)>,
     },
     /// A player won the round.
     RoundWinner {
         player_id: u32,
+        name: String,
         amount: u32,
         hand: String,
     },
     /// A player was eliminated (out of chips).
-    PlayerEliminated { player_id: u32 },
+    PlayerEliminated { player_id: u32, name: String },
     /// The game is over.
     GameOver { winner_id: u32, winner_name: String },
     /// Pong response.
@@ -92,11 +94,11 @@ pub enum GameEvent {
     /// Blinds increased at the start of a new level.
     BlindsIncreased { small_blind: u32, big_blind: u32 },
     /// A player's turn timer has started (broadcast to all).
-    TurnTimerStarted { player_id: u32, timeout_secs: u32 },
+    TurnTimerStarted { player_id: u32, name: String, timeout_secs: u32 },
     /// A player sat out.
-    PlayerSatOut { player_id: u32 },
+    PlayerSatOut { player_id: u32, name: String },
     /// A player sat back in.
-    PlayerSatIn { player_id: u32 },
+    PlayerSatIn { player_id: u32, name: String },
 }
 
 impl GameEvent {
@@ -292,6 +294,15 @@ impl ClientGameState {
         self.sitting_out_players.contains(&player_id)
     }
 
+    /// Look up a player's display name by ID, falling back to `"Player #N"`.
+    pub fn player_name(&self, player_id: u32) -> String {
+        self.players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("Player #{}", player_id))
+    }
+
     /// Evaluate the current best hand rank from the player's hole cards and community cards.
     ///
     /// Returns `None` if the player has no hole cards or not enough community
@@ -363,9 +374,11 @@ impl ClientGameState {
                 changed.players = true;
             }
             ServerMessage::PlayerLeft { player_id } => {
+                let name = self.player_name(*player_id);
                 self.players.retain(|p| p.id != *player_id);
                 self.add_event(GameEvent::PlayerLeft {
                     player_id: *player_id,
+                    name,
                 });
                 changed.players = true;
             }
@@ -474,6 +487,7 @@ impl ClientGameState {
                 }
                 self.add_event(GameEvent::PlayerActed {
                     player_id: *player_id,
+                    name: self.player_name(*player_id),
                     action: *action,
                     amount: *amount,
                 });
@@ -495,8 +509,12 @@ impl ClientGameState {
                 changed.players = true;
             }
             ServerMessage::Showdown { hands } => {
+                let hands_with_names = hands
+                    .iter()
+                    .map(|(id, cards, rank)| (*id, self.player_name(*id), *cards, rank.clone()))
+                    .collect();
                 self.add_event(GameEvent::Showdown {
-                    hands: hands.clone(),
+                    hands: hands_with_names,
                 });
                 changed.phase = true;
             }
@@ -505,8 +523,12 @@ impl ClientGameState {
                 community_cards,
             } => {
                 self.community_cards = community_cards.clone();
+                let hands_with_names = hands
+                    .iter()
+                    .map(|(id, cards, eq)| (*id, self.player_name(*id), *cards, *eq))
+                    .collect();
                 self.add_event(GameEvent::AllInShowdown {
-                    hands: hands.clone(),
+                    hands: hands_with_names,
                 });
                 changed.cards = true;
                 changed.phase = true;
@@ -515,6 +537,7 @@ impl ClientGameState {
                 for (player_id, amount, hand) in winners {
                     self.add_event(GameEvent::RoundWinner {
                         player_id: *player_id,
+                        name: self.player_name(*player_id),
                         amount: *amount,
                         hand: hand.clone(),
                     });
@@ -523,6 +546,7 @@ impl ClientGameState {
             ServerMessage::PlayerEliminated { player_id } => {
                 self.add_event(GameEvent::PlayerEliminated {
                     player_id: *player_id,
+                    name: self.player_name(*player_id),
                 });
                 changed.players = true;
             }
@@ -581,6 +605,7 @@ impl ClientGameState {
                 self.turn_timer_secs = *timeout_secs;
                 self.add_event(GameEvent::TurnTimerStarted {
                     player_id: *player_id,
+                    name: self.player_name(*player_id),
                     timeout_secs: *timeout_secs,
                 });
                 changed.timer = true;
@@ -589,6 +614,7 @@ impl ClientGameState {
                 self.sitting_out_players.insert(*player_id);
                 self.add_event(GameEvent::PlayerSatOut {
                     player_id: *player_id,
+                    name: self.player_name(*player_id),
                 });
                 changed.players = true;
             }
@@ -596,6 +622,7 @@ impl ClientGameState {
                 self.sitting_out_players.remove(player_id);
                 self.add_event(GameEvent::PlayerSatIn {
                     player_id: *player_id,
+                    name: self.player_name(*player_id),
                 });
                 changed.players = true;
             }

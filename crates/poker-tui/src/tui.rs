@@ -723,7 +723,7 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::PlayerJoined { player_id, name } => {
             format!("👤 {} (#{}) joined", name, player_id)
         }
-        GameEvent::PlayerLeft { player_id } => format!("👋 Player #{} left", player_id),
+        GameEvent::PlayerLeft { name, .. } => format!("👋 {} left", name),
         GameEvent::Chat {
             player_name,
             message,
@@ -750,40 +750,42 @@ fn format_event(event: &GameEvent) -> String {
         }
         GameEvent::YourTurn => "🎯 YOUR TURN!".to_string(),
         GameEvent::PlayerActed {
-            player_id,
+            name,
             action,
             amount,
+            ..
         } => match amount {
-            Some(amt) => format!("🎬 #{} {}s ${}", player_id, action, amt),
-            None => format!("🎬 #{} {}s", player_id, action),
+            Some(amt) => format!("🎬 {} {}s ${}", name, action, amt),
+            None => format!("🎬 {} {}s", name, action),
         },
         GameEvent::Showdown { hands } => {
             let mut lines = vec!["🎭 SHOWDOWN".to_string()];
-            for (player_id, cards, rank) in hands {
+            for (_player_id, name, cards, rank) in hands {
                 lines.push(format!(
-                    "   #{}: {} {} - {}",
-                    player_id, cards[0], cards[1], rank
+                    "   {}: {} {} - {}",
+                    name, cards[0], cards[1], rank
                 ));
             }
             lines.join("\n")
         }
         GameEvent::AllInShowdown { hands } => {
             let mut lines = vec!["🔥 ALL-IN SHOWDOWN! 🔥".to_string()];
-            for (player_id, cards, equity) in hands {
+            for (_player_id, name, cards, equity) in hands {
                 lines.push(format!(
-                    "   #{}: {} {} → {:.1}%",
-                    player_id, cards[0], cards[1], equity
+                    "   {}: {} {} → {:.1}%",
+                    name, cards[0], cards[1], equity
                 ));
             }
             lines.join("\n")
         }
         GameEvent::RoundWinner {
-            player_id,
+            name,
             amount,
             hand,
-        } => format!("🏆 #{} wins ${} with {}", player_id, amount, hand),
-        GameEvent::PlayerEliminated { player_id } => {
-            format!("💀 Player #{} eliminated!", player_id)
+            ..
+        } => format!("🏆 {} wins ${} with {}", name, amount, hand),
+        GameEvent::PlayerEliminated { name, .. } => {
+            format!("💀 {} eliminated!", name)
         }
         GameEvent::GameOver {
             winner_id,
@@ -799,14 +801,14 @@ fn format_event(event: &GameEvent) -> String {
             small_blind,
             big_blind,
         } => format!("📈 Blinds increased to {}/{}", small_blind, big_blind),
-        GameEvent::TurnTimerStarted { player_id, timeout_secs } => {
-            format!("⏱ Player #{} has {}s to act", player_id, timeout_secs)
+        GameEvent::TurnTimerStarted { name, timeout_secs, .. } => {
+            format!("⏱ {} has {}s to act", name, timeout_secs)
         }
-        GameEvent::PlayerSatOut { player_id } => {
-            format!("💤 Player #{} is sitting out", player_id)
+        GameEvent::PlayerSatOut { name, .. } => {
+            format!("💤 {} is sitting out", name)
         }
-        GameEvent::PlayerSatIn { player_id } => {
-            format!("✅ Player #{} is back in", player_id)
+        GameEvent::PlayerSatIn { name, .. } => {
+            format!("✅ {} is back in", name)
         }
     }
 }
