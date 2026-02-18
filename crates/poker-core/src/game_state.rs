@@ -91,6 +91,8 @@ pub enum GameEvent {
     Text { text: String, category: LogCategory },
     /// Blinds increased at the start of a new level.
     BlindsIncreased { small_blind: u32, big_blind: u32 },
+    /// A player's turn timer has started (broadcast to all).
+    TurnTimerStarted { player_id: u32, timeout_secs: u32 },
 }
 
 impl GameEvent {
@@ -125,6 +127,7 @@ impl GameEvent {
 
             Self::Text { category, .. } => *category,
             Self::BlindsIncreased { .. } => LogCategory::System,
+            Self::TurnTimerStarted { .. } => LogCategory::System,
         }
     }
 }
@@ -145,12 +148,14 @@ pub struct StateChanged {
     pub pot: bool,
     /// The game phase/stage changed (new hand, flop, turn, river, showdown).
     pub phase: bool,
+    /// The turn timer changed (started for a new player).
+    pub timer: bool,
 }
 
 impl StateChanged {
     /// Returns `true` if any flag is set.
     pub fn any(self) -> bool {
-        self.actions || self.players || self.cards || self.pot || self.phase
+        self.actions || self.players || self.cards || self.pot || self.phase || self.timer
     }
 }
 
@@ -207,6 +212,10 @@ pub struct ClientGameState {
     /// Tracks chips invested since the last `NewHand` so the UI can show
     /// effective stacks (stack minus bet) alongside the bet.
     pub player_bets: HashMap<u32, u32>,
+    /// Player whose turn timer is currently running (if any).
+    pub turn_timer_player: Option<u32>,
+    /// Duration (in seconds) of the current turn timer.
+    pub turn_timer_secs: u32,
 }
 
 impl ClientGameState {
@@ -241,6 +250,8 @@ impl ClientGameState {
             connected: true,
             game_started: false,
             player_bets: HashMap::new(),
+            turn_timer_player: None,
+            turn_timer_secs: 0,
         }
     }
 
@@ -380,6 +391,8 @@ impl ClientGameState {
                 self.pot = small_blind + big_blind;
                 self.stage = "Preflop".to_string();
                 self.is_our_turn = false;
+                self.turn_timer_player = None;
+                self.turn_timer_secs = 0;
                 // Reset per-player bets and record blind postings.
                 self.player_bets.clear();
                 self.player_bets.insert(*small_blind_id, *small_blind);
@@ -503,8 +516,11 @@ impl ClientGameState {
                     winner_name: winner_name.clone(),
                 });
                 self.game_started = false;
+                self.turn_timer_player = None;
+                self.turn_timer_secs = 0;
                 changed.actions = true;
                 changed.phase = true;
+                changed.timer = true;
             }
             ServerMessage::Ok => {}
             ServerMessage::Pong => {
@@ -537,6 +553,18 @@ impl ClientGameState {
                     big_blind: *big_blind,
                 });
                 changed.phase = true;
+            }
+            ServerMessage::TurnTimerStarted {
+                player_id,
+                timeout_secs,
+            } => {
+                self.turn_timer_player = Some(*player_id);
+                self.turn_timer_secs = *timeout_secs;
+                self.add_event(GameEvent::TurnTimerStarted {
+                    player_id: *player_id,
+                    timeout_secs: *timeout_secs,
+                });
+                changed.timer = true;
             }
         }
 

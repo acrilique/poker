@@ -150,6 +150,10 @@ fn render_event(event: &GameEvent) -> Element {
             format!("Blinds increased to {small_blind}/{big_blind}"),
             category_color(LogCategory::System),
         ),
+        GameEvent::TurnTimerStarted { player_id, timeout_secs } => (
+            format!("Player {player_id} has {timeout_secs}s to act"),
+            category_color(LogCategory::System),
+        ),
     };
 
     rsx! {

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use poker_core::game_logic::GameState;
 use poker_core::protocol::{validate_room_id, BlindConfig, ServerMessage};
@@ -26,6 +27,9 @@ pub struct Room {
     pub player_senders: HashMap<u32, PlayerTx>,
     /// Blind increase configuration for this room.
     pub blind_config: BlindConfig,
+    /// Monotonically increasing counter incremented every time a new turn
+    /// starts.  Used to invalidate stale turn-timer tasks.
+    pub turn_counter: Arc<AtomicU64>,
 }
 
 impl Room {
@@ -36,6 +40,7 @@ impl Room {
             game_state: Arc::new(Mutex::new(gs)),
             player_senders: HashMap::new(),
             blind_config,
+            turn_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 

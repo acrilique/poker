@@ -285,6 +285,14 @@ pub enum ServerMessage {
         big_blind: u32,
     },
 
+    /// A player's turn timer has started.
+    ///
+    /// Broadcast to all players so UIs can show a countdown.
+    TurnTimerStarted {
+        player_id: u32,
+        timeout_secs: u32,
+    },
+
     /// A room was successfully created.
     RoomCreated { room_id: String },
 

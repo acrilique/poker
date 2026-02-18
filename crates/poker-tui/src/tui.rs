@@ -799,6 +799,9 @@ fn format_event(event: &GameEvent) -> String {
             small_blind,
             big_blind,
         } => format!("📈 Blinds increased to {}/{}", small_blind, big_blind),
+        GameEvent::TurnTimerStarted { player_id, timeout_secs } => {
+            format!("⏱ Player #{} has {}s to act", player_id, timeout_secs)
+        }
     }
 }
 

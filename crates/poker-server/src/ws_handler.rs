@@ -9,10 +9,11 @@
 //! 4. On disconnect the player is removed and the room may be cleaned up.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use poker_core::game_logic::{card_to_info, GamePhase, GameState, PlayerStatus};
+use poker_core::game_logic::{card_to_info, GamePhase, GameState, PlayerStatus, TURN_TIMEOUT_SECS};
 use poker_core::poker::{Hand, calculate_equity_multi};
 use poker_core::protocol::{
     CardInfo, ClientMessage, PlayerAction, ServerMessage,
@@ -292,8 +293,8 @@ async fn process_client_message(
             // Send hole cards privately to each player.
             send_hole_cards(&gs, &room);
 
-            // Notify the current player it's their turn.
-            send_turn_notification(&gs, &room);
+            // Notify the current player it's their turn and start the timer.
+            notify_turn_and_start_timer(&gs, &room, room_arc);
         }
 
         // ── Betting actions ─────────────────────────────────────────
@@ -488,7 +489,7 @@ async fn process_action(
         for m in &msgs {
             room.broadcast(m);
         }
-        maybe_start_new_hand(&mut gs, &room).await;
+        maybe_start_new_hand(&mut gs, &room, room_arc).await;
         return;
     }
 
@@ -498,7 +499,7 @@ async fn process_action(
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &room).await;
+            maybe_start_new_hand(&mut gs, &room, room_arc).await;
         } else {
             // Advance to next phase.
             let phase_msgs = gs.advance_phase();
@@ -517,11 +518,11 @@ async fn process_action(
 
                 run_out_board(room_arc).await;
             } else {
-                send_turn_notification(&gs, &room);
+                notify_turn_and_start_timer(&gs, &room, room_arc);
             }
         }
     } else {
-        send_turn_notification(&gs, &room);
+        notify_turn_and_start_timer(&gs, &room, room_arc);
     }
 }
 
@@ -530,6 +531,7 @@ async fn process_action(
 async fn maybe_start_new_hand(
     gs: &mut GameState,
     room: &Room,
+    room_arc: &Arc<Mutex<Room>>,
 ) {
     if gs.game_started && gs.player_order.len() >= 2 {
         // Drop locks before sleeping would be ideal, but we hold mutable
@@ -541,7 +543,7 @@ async fn maybe_start_new_hand(
             room.broadcast(m);
         }
         send_hole_cards(gs, room);
-        send_turn_notification(gs, room);
+        notify_turn_and_start_timer(gs, room, room_arc);
     }
 }
 
@@ -576,7 +578,7 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &room).await;
+            maybe_start_new_hand(&mut gs, &room, room_arc).await;
             return;
         }
     }
@@ -603,6 +605,85 @@ fn send_turn_notification(gs: &GameState, room: &Room) {
             },
         );
     }
+}
+
+/// Send the turn notification **and** start a 30-second turn timer.
+///
+/// Increments the room's turn counter so any previously-spawned timer
+/// becomes a no-op, then spawns a new background task that will force a
+/// check-or-fold when the timeout elapses.
+fn notify_turn_and_start_timer(
+    gs: &GameState,
+    room: &Room,
+    room_arc: &Arc<Mutex<Room>>,
+) {
+    // Send the private YourTurn message to the current player.
+    send_turn_notification(gs, room);
+
+    let Some(current_id) = gs.current_player_id() else {
+        return;
+    };
+
+    // Increment the turn counter to invalidate any stale timer tasks.
+    let turn = room.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // Broadcast the timer start to all players so UIs can show a countdown.
+    room.broadcast(&ServerMessage::TurnTimerStarted {
+        player_id: current_id,
+        timeout_secs: TURN_TIMEOUT_SECS,
+    });
+
+    // Spawn a background task that will force an action after the timeout.
+    let counter = Arc::clone(&room.turn_counter);
+    let room_arc_clone = Arc::clone(room_arc);
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(TURN_TIMEOUT_SECS as u64)).await;
+        // Only act if the turn counter still matches (i.e. no one has acted
+        // or started a new turn since we spawned).
+        if counter.load(Ordering::SeqCst) == turn {
+            force_timeout_action(room_arc_clone, turn, current_id).await;
+        }
+    });
+}
+
+/// Force a check-or-fold for a player whose turn timer has expired.
+async fn force_timeout_action(
+    room_arc: Arc<Mutex<Room>>,
+    expected_turn: u64,
+    player_id: u32,
+) {
+    // Quick pre-check under the lock to confirm the turn is still valid.
+    {
+        let room = room_arc.lock().await;
+        let gs = room.game_state.lock().await;
+
+        if room.turn_counter.load(Ordering::SeqCst) != expected_turn {
+            return;
+        }
+        if !gs.game_started {
+            return;
+        }
+        if gs.current_player_id() != Some(player_id) {
+            return;
+        }
+    }
+
+    // Determine the forced action (check if valid, otherwise fold).
+    let action = {
+        let room = room_arc.lock().await;
+        let gs = room.game_state.lock().await;
+        let valid = gs.valid_actions(player_id);
+        if valid.contains(&PlayerAction::Check) {
+            PlayerAction::Check
+        } else {
+            PlayerAction::Fold
+        }
+    };
+
+    tracing::info!(player = player_id, ?action, "Turn timer expired, forcing action");
+
+    // Reuse the normal action processing pipeline.
+    process_action(player_id, action, 0, &room_arc).await;
 }
 
 /// Broadcast an all-in showdown with equity percentages.

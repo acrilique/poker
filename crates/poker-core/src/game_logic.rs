@@ -12,6 +12,13 @@ use crate::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage};
 use rand::rng;
 use rand::seq::SliceRandom;
 
+/// Fixed per-turn timer duration in seconds.
+///
+/// When a player's turn begins the server starts a countdown.  If the player
+/// has not acted by the time it reaches zero, the server forces a *check* (if
+/// allowed) or a *fold*.
+pub const TURN_TIMEOUT_SECS: u32 = 30;
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
