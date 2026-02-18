@@ -371,7 +371,23 @@ impl GameState {
         }
 
         if let Some(first_idx) = self.first_actor_index {
-            return self.current_player_index == first_idx;
+            // The original first actor may have folded (or gone all-in) since
+            // the index was recorded.  Advance to the next Active player from
+            // that position so the sentinel is reachable by next_player().
+            let mut sentinel = first_idx;
+            for _ in 0..self.player_order.len() {
+                if self
+                    .player_order
+                    .get(sentinel)
+                    .and_then(|&id| self.players.get(&id))
+                    .map(|p| p.status == PlayerStatus::Active)
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                sentinel = (sentinel + 1) % self.player_order.len();
+            }
+            return self.current_player_index == sentinel;
         }
 
         true
