@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use poker_core::game_logic::GameState;
-use poker_core::protocol::{validate_room_id, BlindConfig, ServerMessage};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use poker_core::protocol::{BlindConfig, ServerMessage, validate_room_id};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 /// Handle to a per-player outbound channel.
 ///
@@ -88,14 +88,21 @@ impl RoomManager {
     /// Create a new room with the given ID.
     ///
     /// Returns an error string if the room ID is invalid or already taken.
-    pub async fn create_room(&self, room_id: &str, blind_config: BlindConfig) -> Result<(), String> {
+    pub async fn create_room(
+        &self,
+        room_id: &str,
+        blind_config: BlindConfig,
+    ) -> Result<(), String> {
         validate_room_id(room_id)?;
 
         let mut rooms = self.rooms.write().await;
         if rooms.contains_key(room_id) {
             return Err(format!("Room '{}' already exists", room_id));
         }
-        rooms.insert(room_id.to_string(), Arc::new(Mutex::new(Room::new(blind_config))));
+        rooms.insert(
+            room_id.to_string(),
+            Arc::new(Mutex::new(Room::new(blind_config))),
+        );
         Ok(())
     }
 

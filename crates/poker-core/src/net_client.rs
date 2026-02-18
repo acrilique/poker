@@ -9,8 +9,8 @@
 //! convenience methods [`connect`](NetClient::connect) (TCP) and
 //! [`connect_ws`](NetClient::connect_ws) (WebSocket).
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(feature = "legacy-server")]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(feature = "legacy-server")]
@@ -271,10 +271,9 @@ impl NetClient {
     #[cfg(all(feature = "web", not(feature = "native")))]
     pub async fn connect_ws(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
         use futures_util::{SinkExt, StreamExt};
-        use gloo_net::websocket::{futures::WebSocket, Message};
+        use gloo_net::websocket::{Message, futures::WebSocket};
 
-        let ws = WebSocket::open(url)
-            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+        let ws = WebSocket::open(url).map_err(|e| format!("WebSocket connect failed: {e}"))?;
         let (mut sink, mut stream) = ws.split();
 
         let player_id = Arc::new(AtomicU32::new(0));

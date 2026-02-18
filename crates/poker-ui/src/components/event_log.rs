@@ -31,10 +31,9 @@ fn render_event(event: &GameEvent) -> Element {
             format!("{name} joined the game"),
             category_color(LogCategory::Info),
         ),
-        GameEvent::PlayerLeft { name, .. } => (
-            format!("{name} left"),
-            category_color(LogCategory::Info),
-        ),
+        GameEvent::PlayerLeft { name, .. } => {
+            (format!("{name} left"), category_color(LogCategory::Info))
+        }
         GameEvent::Chat {
             player_name,
             message,
@@ -77,9 +76,7 @@ fn render_event(event: &GameEvent) -> Element {
             amount,
             ..
         } => {
-            let amt = amount
-                .map(|a| format!(" ({a})"))
-                .unwrap_or_default();
+            let amt = amount.map(|a| format!(" ({a})")).unwrap_or_default();
             (
                 format!("{name} {action}{amt}"),
                 category_color(LogCategory::Action),
@@ -88,7 +85,9 @@ fn render_event(event: &GameEvent) -> Element {
         GameEvent::Showdown { hands } => {
             let lines: Vec<String> = hands
                 .iter()
-                .map(|(_id, name, cards, hand)| format!("  {name}: {} {} — {hand}", cards[0], cards[1]))
+                .map(|(_id, name, cards, hand)| {
+                    format!("  {name}: {} {} — {hand}", cards[0], cards[1])
+                })
                 .collect();
             (
                 format!("Showdown:\n{}", lines.join("\n")),
@@ -108,10 +107,7 @@ fn render_event(event: &GameEvent) -> Element {
             )
         }
         GameEvent::RoundWinner {
-            name,
-            amount,
-            hand,
-            ..
+            name, amount, hand, ..
         } => (
             format!("{name} wins {amount} ({hand})"),
             category_color(LogCategory::Winner),
@@ -120,10 +116,7 @@ fn render_event(event: &GameEvent) -> Element {
             format!("{name} eliminated"),
             category_color(LogCategory::Info),
         ),
-        GameEvent::GameOver {
-            winner_name,
-            ..
-        } => (
+        GameEvent::GameOver { winner_name, .. } => (
             format!("🏆 {winner_name} wins the game!"),
             category_color(LogCategory::Winner),
         ),
@@ -140,10 +133,9 @@ fn render_event(event: &GameEvent) -> Element {
             format!("Connection error: {message}"),
             category_color(LogCategory::Error),
         ),
-        GameEvent::Unknown { raw } => (
-            format!("Unknown: {raw}"),
-            category_color(LogCategory::Info),
-        ),
+        GameEvent::Unknown { raw } => {
+            (format!("Unknown: {raw}"), category_color(LogCategory::Info))
+        }
         GameEvent::Text { text, category } => (text.clone(), category_color(*category)),
         GameEvent::BlindsIncreased {
             small_blind,
@@ -152,7 +144,9 @@ fn render_event(event: &GameEvent) -> Element {
             format!("Blinds increased to {small_blind}/{big_blind}"),
             category_color(LogCategory::System),
         ),
-        GameEvent::TurnTimerStarted { name, timeout_secs, .. } => (
+        GameEvent::TurnTimerStarted {
+            name, timeout_secs, ..
+        } => (
             format!("{name} has {timeout_secs}s to act"),
             category_color(LogCategory::System),
         ),

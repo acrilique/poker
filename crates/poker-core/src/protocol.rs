@@ -286,18 +286,12 @@ pub enum ServerMessage {
     GameOver { winner_id: u32, winner_name: String },
 
     /// Blinds have increased at the start of a new hand.
-    BlindsIncreased {
-        small_blind: u32,
-        big_blind: u32,
-    },
+    BlindsIncreased { small_blind: u32, big_blind: u32 },
 
     /// A player's turn timer has started.
     ///
     /// Broadcast to all players so UIs can show a countdown.
-    TurnTimerStarted {
-        player_id: u32,
-        timeout_secs: u32,
-    },
+    TurnTimerStarted { player_id: u32, timeout_secs: u32 },
 
     /// A player is now sitting out.
     PlayerSatOut { player_id: u32 },

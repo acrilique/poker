@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::poker::{Board, Hand, HandRank};
-use crate::protocol::{BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
+use crate::protocol::{
+    BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage,
+};
 
 /// Semantic category for log/event messages. The UI layer decides how to style each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +96,11 @@ pub enum GameEvent {
     /// Blinds increased at the start of a new level.
     BlindsIncreased { small_blind: u32, big_blind: u32 },
     /// A player's turn timer has started (broadcast to all).
-    TurnTimerStarted { player_id: u32, name: String, timeout_secs: u32 },
+    TurnTimerStarted {
+        player_id: u32,
+        name: String,
+        timeout_secs: u32,
+    },
     /// A player sat out.
     PlayerSatOut { player_id: u32, name: String },
     /// A player sat back in.
@@ -577,7 +583,10 @@ impl ClientGameState {
             ServerMessage::RoomCreated { .. } => {
                 // Handled at the connection-screen level, not game state.
             }
-            ServerMessage::RoomJoined { room_id, blind_config } => {
+            ServerMessage::RoomJoined {
+                room_id,
+                blind_config,
+            } => {
                 self.room_id = room_id.clone();
                 self.blind_config = *blind_config;
             }
@@ -737,4 +746,3 @@ impl RaisePreset {
         }
     }
 }
-

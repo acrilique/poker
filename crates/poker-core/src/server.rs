@@ -9,9 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast};
 
-use crate::game_logic::{
-    GamePhase, GameState, PlayerStatus, card_to_info,
-};
+use crate::game_logic::{GamePhase, GameState, PlayerStatus, card_to_info};
 use crate::poker::{Hand, calculate_equity_multi};
 use crate::protocol::{CardInfo, ClientMessage, PlayerAction, ServerMessage};
 
@@ -285,7 +283,8 @@ async fn process_message(
         }
 
         ClientMessage::Raise { amount } => {
-            process_betting_action(state, broadcast_tx, player_id, PlayerAction::Raise, amount).await
+            process_betting_action(state, broadcast_tx, player_id, PlayerAction::Raise, amount)
+                .await
         }
 
         ClientMessage::AllIn => {
@@ -296,11 +295,9 @@ async fn process_message(
 
         // Room management is handled by the new Axum server (poker-server).
         // The legacy TCP server does not support rooms.
-        ClientMessage::CreateRoom { .. } | ClientMessage::JoinRoom { .. } => {
-            ServerMessage::Error {
-                message: "Room management is not supported by the legacy TCP server".to_string(),
-            }
-        }
+        ClientMessage::CreateRoom { .. } | ClientMessage::JoinRoom { .. } => ServerMessage::Error {
+            message: "Room management is not supported by the legacy TCP server".to_string(),
+        },
     }
 }
 

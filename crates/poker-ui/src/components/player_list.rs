@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use poker_core::game_state::ClientGameState;
 use poker_core::protocol::ClientMessage;
 
-use crate::{format_stack, StackDisplayMode, UiMessage};
+use crate::{StackDisplayMode, UiMessage, format_stack};
 
 #[component]
 pub fn PlayerList(state: Signal<ClientGameState>) -> Element {

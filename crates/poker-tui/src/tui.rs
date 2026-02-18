@@ -5,7 +5,9 @@
 //! [`crate::net_client`]. This module has no networking dependencies.
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -19,7 +21,7 @@ use ratatui::{
 };
 use std::io::{self, Stdout};
 
-use poker_core::game_state::{ClientGameState, GameEvent, LogCategory, RaisePreset, RAISE_PRESETS};
+use poker_core::game_state::{ClientGameState, GameEvent, LogCategory, RAISE_PRESETS, RaisePreset};
 use poker_core::protocol::{CardInfo, ClientMessage, PlayerAction, PlayerInfo};
 
 // ---------------------------------------------------------------------------
@@ -103,8 +105,7 @@ impl TuiState {
         if is_not_cursor_leftmost {
             let current_index = self.raise_cursor;
             let from_left_to_current_index = current_index - 1;
-            let before_char_to_delete =
-                self.raise_input.chars().take(from_left_to_current_index);
+            let before_char_to_delete = self.raise_input.chars().take(from_left_to_current_index);
             let after_char_to_delete = self.raise_input.chars().skip(current_index);
             self.raise_input = before_char_to_delete.chain(after_char_to_delete).collect();
             self.move_cursor_left();
@@ -180,7 +181,8 @@ fn action_buttons(gs: &ClientGameState) -> Vec<ActionButton> {
 
 fn control_rows(gs: &ClientGameState) -> Vec<Vec<ControlButton>> {
     let mut rows = Vec::new();
-    let show_presets = gs.is_our_turn && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn));
+    let show_presets = gs.is_our_turn
+        && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn));
     if show_presets {
         rows.push(
             RAISE_PRESETS
@@ -217,10 +219,7 @@ fn control_button_at(gs: &ClientGameState, index: usize) -> ControlButton {
     ControlButton::Action(ActionButton::Start)
 }
 
-fn selected_row_col(
-    tui: &TuiState,
-    rows: &[Vec<ControlButton>],
-) -> Option<(usize, usize)> {
+fn selected_row_col(tui: &TuiState, rows: &[Vec<ControlButton>]) -> Option<(usize, usize)> {
     if rows.is_empty() {
         return None;
     }
@@ -275,18 +274,14 @@ fn handle_control_activation(
             UserIntent::None
         }
         ControlButton::Action(ActionButton::Start) => UserIntent::Send(ClientMessage::StartGame),
-        ControlButton::Action(ActionButton::FoldCheck) => {
-            match gs.fold_or_check() {
-                Some(msg) => UserIntent::Send(msg),
-                None => UserIntent::None,
-            }
-        }
-        ControlButton::Action(ActionButton::Call) => {
-            match gs.call() {
-                Some(msg) => UserIntent::Send(msg),
-                None => UserIntent::None,
-            }
-        }
+        ControlButton::Action(ActionButton::FoldCheck) => match gs.fold_or_check() {
+            Some(msg) => UserIntent::Send(msg),
+            None => UserIntent::None,
+        },
+        ControlButton::Action(ActionButton::Call) => match gs.call() {
+            Some(msg) => UserIntent::Send(msg),
+            None => UserIntent::None,
+        },
         ControlButton::Action(ActionButton::Raise) => {
             if tui.pending_all_in {
                 match gs.raise(0, true) {
@@ -307,9 +302,7 @@ fn handle_control_activation(
             };
             match gs.raise(amount, false) {
                 Ok(msg) => UserIntent::Send(msg),
-                Err(e) => {
-                    UserIntent::Feedback(e, LogCategory::Error)
-                }
+                Err(e) => UserIntent::Feedback(e, LogCategory::Error),
             }
         }
     }
@@ -366,10 +359,7 @@ impl Tui {
     /// Poll for a keyboard event and, if one is available, translate it into
     /// a [`UserIntent`]. This never blocks — returns [`UserIntent::None`]
     /// immediately when no event is pending.
-    pub fn poll_and_handle_input(
-        &mut self,
-        gs: &ClientGameState,
-    ) -> io::Result<UserIntent> {
+    pub fn poll_and_handle_input(&mut self, gs: &ClientGameState) -> io::Result<UserIntent> {
         if !event::poll(std::time::Duration::from_millis(0))? {
             return Ok(UserIntent::None);
         }
@@ -397,11 +387,7 @@ impl Tui {
 
     // -- private -----------------------------------------------------------
 
-    fn handle_key_event(
-        &mut self,
-        key: KeyEvent,
-        gs: &ClientGameState,
-    ) -> UserIntent {
+    fn handle_key_event(&mut self, key: KeyEvent, gs: &ClientGameState) -> UserIntent {
         let tui = &mut self.state;
         match key.code {
             KeyCode::Esc => {
@@ -519,7 +505,7 @@ fn ui(frame: &mut Frame, gs: &ClientGameState, tui: &TuiState) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(20), // Players + Info
-            Constraint::Min(70),   // Game board + messages
+            Constraint::Min(70),    // Game board + messages
         ])
         .split(main_layout[0]);
 
@@ -540,7 +526,7 @@ fn ui(frame: &mut Frame, gs: &ClientGameState, tui: &TuiState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(8), // Game board
-            Constraint::Min(5),   // Messages
+            Constraint::Min(5),    // Messages
         ])
         .split(content_layout[1]);
 
@@ -761,10 +747,7 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::Showdown { hands } => {
             let mut lines = vec!["🎭 SHOWDOWN".to_string()];
             for (_player_id, name, cards, rank) in hands {
-                lines.push(format!(
-                    "   {}: {} {} - {}",
-                    name, cards[0], cards[1], rank
-                ));
+                lines.push(format!("   {}: {} {} - {}", name, cards[0], cards[1], rank));
             }
             lines.join("\n")
         }
@@ -779,10 +762,7 @@ fn format_event(event: &GameEvent) -> String {
             lines.join("\n")
         }
         GameEvent::RoundWinner {
-            name,
-            amount,
-            hand,
-            ..
+            name, amount, hand, ..
         } => format!("🏆 {} wins ${} with {}", name, amount, hand),
         GameEvent::PlayerEliminated { name, .. } => {
             format!("💀 {} eliminated!", name)
@@ -801,7 +781,9 @@ fn format_event(event: &GameEvent) -> String {
             small_blind,
             big_blind,
         } => format!("📈 Blinds increased to {}/{}", small_blind, big_blind),
-        GameEvent::TurnTimerStarted { name, timeout_secs, .. } => {
+        GameEvent::TurnTimerStarted {
+            name, timeout_secs, ..
+        } => {
             format!("⏱ {} has {}s to act", name, timeout_secs)
         }
         GameEvent::PlayerSatOut { name, .. } => {
@@ -928,15 +910,20 @@ fn action_label(gs: &ClientGameState, action: ActionButton) -> String {
 fn control_button_enabled(gs: &ClientGameState, button: ControlButton) -> bool {
     match button {
         ControlButton::Preset(_) => {
-            gs.is_our_turn && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn))
+            gs.is_our_turn
+                && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn))
         }
         ControlButton::Action(ActionButton::Start) => !gs.game_started,
         ControlButton::Action(ActionButton::FoldCheck) => {
-            gs.is_our_turn && (gs.has_action(PlayerAction::Check) || gs.has_action(PlayerAction::Fold))
+            gs.is_our_turn
+                && (gs.has_action(PlayerAction::Check) || gs.has_action(PlayerAction::Fold))
         }
-        ControlButton::Action(ActionButton::Call) => gs.is_our_turn && gs.has_action(PlayerAction::Call),
+        ControlButton::Action(ActionButton::Call) => {
+            gs.is_our_turn && gs.has_action(PlayerAction::Call)
+        }
         ControlButton::Action(ActionButton::Raise) => {
-            gs.is_our_turn && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn))
+            gs.is_our_turn
+                && (gs.has_action(PlayerAction::Raise) || gs.has_action(PlayerAction::AllIn))
         }
     }
 }

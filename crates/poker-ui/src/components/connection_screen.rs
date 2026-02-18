@@ -1,7 +1,7 @@
 //! Connection screen — name, server address, room ID, create/join buttons.
 
 use dioxus::prelude::*;
-use poker_core::protocol::{validate_room_id, BlindConfig};
+use poker_core::protocol::{BlindConfig, validate_room_id};
 
 use crate::UiMessage;
 
@@ -50,11 +50,7 @@ pub fn ConnectionScreen(
                 .parse::<u64>()
                 .unwrap_or(0)
                 * 60;
-            let increase_percent = blind_increase_pct
-                .read()
-                .trim()
-                .parse::<u32>()
-                .unwrap_or(0);
+            let increase_percent = blind_increase_pct.read().trim().parse::<u32>().unwrap_or(0);
             BlindConfig {
                 interval_secs,
                 increase_percent,

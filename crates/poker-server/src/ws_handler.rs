@@ -13,11 +13,9 @@ use std::sync::atomic::Ordering;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use poker_core::game_logic::{card_to_info, GamePhase, GameState, PlayerStatus, TURN_TIMEOUT_SECS};
+use poker_core::game_logic::{GamePhase, GameState, PlayerStatus, TURN_TIMEOUT_SECS, card_to_info};
 use poker_core::poker::{Hand, calculate_equity_multi};
-use poker_core::protocol::{
-    CardInfo, ClientMessage, PlayerAction, ServerMessage,
-};
+use poker_core::protocol::{CardInfo, ClientMessage, PlayerAction, ServerMessage};
 use tokio::sync::Mutex;
 
 use crate::room::{PlayerRx, Room, RoomManager};
@@ -83,10 +81,14 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                 let room = rarc.lock().await;
                                 room.blind_config
                             };
-                            send_one(&ws_sink, &ServerMessage::RoomJoined {
-                                room_id: rid.clone(),
-                                blind_config,
-                            }).await;
+                            send_one(
+                                &ws_sink,
+                                &ServerMessage::RoomJoined {
+                                    room_id: rid.clone(),
+                                    blind_config,
+                                },
+                            )
+                            .await;
                             send_one(&ws_sink, &joined).await;
 
                             // Send the full player list so the newcomer sees existing participants.
@@ -204,11 +206,7 @@ async fn send_one(
 // ─── Message processing ──────────────────────────────────────────────────
 
 /// Process a single [`ClientMessage`] within an established room session.
-async fn process_client_message(
-    msg: &ClientMessage,
-    player_id: u32,
-    room_arc: &Arc<Mutex<Room>>,
-) {
+async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &Arc<Mutex<Room>>) {
     match msg {
         // ── Join / room ops are no-ops once in a room ────────────────
         ClientMessage::Join { .. }
@@ -317,7 +315,12 @@ async fn process_client_message(
         ClientMessage::SitOut => {
             let room = room_arc.lock().await;
             let mut gs = room.game_state.lock().await;
-            if gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(true) {
+            if gs
+                .players
+                .get(&player_id)
+                .map(|p| p.sitting_out)
+                .unwrap_or(true)
+            {
                 return; // already sitting out or unknown player
             }
             gs.set_sitting_out(player_id);
@@ -327,7 +330,12 @@ async fn process_client_message(
         ClientMessage::SitIn => {
             let room = room_arc.lock().await;
             let mut gs = room.game_state.lock().await;
-            if !gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(false) {
+            if !gs
+                .players
+                .get(&player_id)
+                .map(|p| p.sitting_out)
+                .unwrap_or(false)
+            {
                 return; // already sitting in or unknown player
             }
             gs.set_sitting_in(player_id);
@@ -548,11 +556,7 @@ async fn process_action(
 
 /// If the game is still running with ≥ 2 players, start the next hand
 /// after a short delay.
-async fn maybe_start_new_hand(
-    gs: &mut GameState,
-    room: &Room,
-    room_arc: &Arc<Mutex<Room>>,
-) {
+async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
     if gs.game_started && gs.player_order.len() >= 2 {
         // Drop locks before sleeping would be ideal, but we hold mutable
         // borrows here. Since the delay is short (2 s) and actions are
@@ -635,11 +639,7 @@ fn send_turn_notification(gs: &GameState, room: &Room) {
 ///
 /// If the current player is sitting out, their action is resolved
 /// immediately (auto-check or auto-fold) instead of waiting for input.
-fn notify_turn_and_start_timer(
-    gs: &GameState,
-    room: &Room,
-    room_arc: &Arc<Mutex<Room>>,
-) {
+fn notify_turn_and_start_timer(gs: &GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
     // Send the private YourTurn message to the current player.
     send_turn_notification(gs, room);
 
@@ -662,7 +662,11 @@ fn notify_turn_and_start_timer(
         tokio::spawn(async move {
             // Small delay so the turn notification is delivered first.
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            tracing::info!(player = current_id, ?action, "Sitting-out player, auto-acting");
+            tracing::info!(
+                player = current_id,
+                ?action,
+                "Sitting-out player, auto-acting"
+            );
             process_action(current_id, action, 0, &room_arc_clone).await;
         });
         return;
@@ -691,11 +695,7 @@ fn notify_turn_and_start_timer(
 ///
 /// If the forced action is a fold (i.e. the player could not simply check),
 /// the player is also automatically sat out.
-async fn force_timeout_action(
-    room_arc: Arc<Mutex<Room>>,
-    expected_turn: u64,
-    player_id: u32,
-) {
+async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, player_id: u32) {
     // Quick pre-check under the lock to confirm the turn is still valid.
     {
         let room = room_arc.lock().await;
@@ -728,14 +728,23 @@ async fn force_timeout_action(
     if action == PlayerAction::Fold {
         let room = room_arc.lock().await;
         let mut gs = room.game_state.lock().await;
-        if !gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(true) {
+        if !gs
+            .players
+            .get(&player_id)
+            .map(|p| p.sitting_out)
+            .unwrap_or(true)
+        {
             gs.set_sitting_out(player_id);
             room.broadcast(&ServerMessage::PlayerSatOut { player_id });
             tracing::info!(player = player_id, "Auto sitting out after timeout fold");
         }
     }
 
-    tracing::info!(player = player_id, ?action, "Turn timer expired, forcing action");
+    tracing::info!(
+        player = player_id,
+        ?action,
+        "Turn timer expired, forcing action"
+    );
 
     // Reuse the normal action processing pipeline.
     process_action(player_id, action, 0, &room_arc).await;
@@ -760,7 +769,10 @@ fn broadcast_allin_showdown(gs: &GameState, room: &Room) {
     }
 
     let board = gs.build_board();
-    let hands_for_calc: Vec<Hand> = player_hands.iter().map(|(_, _, h)| Hand(h.0, h.1)).collect();
+    let hands_for_calc: Vec<Hand> = player_hands
+        .iter()
+        .map(|(_, _, h)| Hand(h.0, h.1))
+        .collect();
     let equities = calculate_equity_multi(&hands_for_calc, &board, 1000);
 
     let hands_with_equity: Vec<(u32, [CardInfo; 2], f64)> = player_hands

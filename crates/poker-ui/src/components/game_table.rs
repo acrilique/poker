@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use poker_core::game_state::ClientGameState;
 
 use super::card;
-use crate::{format_stack, StackDisplayMode};
+use crate::{StackDisplayMode, format_stack};
 
 #[component]
 pub fn GameTable(state: Signal<ClientGameState>) -> Element {

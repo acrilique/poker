@@ -6,9 +6,9 @@
 //!
 //! This module is specific to the TUI binary.
 
+use crate::tui::{Tui, UserIntent};
 use poker_core::client_controller::{ClientController, PollResult};
 use poker_core::protocol::{BlindConfig, ClientMessage};
-use crate::tui::{Tui, UserIntent};
 
 /// Start the poker client, connecting via WebSocket to the given server/room.
 ///

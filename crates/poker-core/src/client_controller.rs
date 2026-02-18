@@ -66,10 +66,7 @@ impl ClientController {
     /// No join handshake is sent — the caller should send `JoinRoom` after
     /// construction.
     #[cfg(any(feature = "native", feature = "web"))]
-    pub async fn connect_ws(
-        url: &str,
-        name: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn connect_ws(url: &str, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let net = NetClient::connect_ws(url).await?;
         let state = ClientGameState::new(name);
         Ok(Self { net, state })
@@ -83,10 +80,7 @@ impl ClientController {
     ///
     /// Only available with the `legacy-server` feature (old TCP protocol).
     #[cfg(feature = "legacy-server")]
-    pub async fn connect(
-        address: &str,
-        name: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn connect(address: &str, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let net = NetClient::connect(address, name).await?;
         let state = ClientGameState::new(name);
         Ok(Self { net, state })
@@ -186,7 +180,8 @@ impl ClientController {
             }
             NetEvent::Error(e) => {
                 self.state.connected = false;
-                self.state.add_event(GameEvent::ConnectionError { message: e });
+                self.state
+                    .add_event(GameEvent::ConnectionError { message: e });
                 PollResult::Error
             }
             NetEvent::Disconnected => {

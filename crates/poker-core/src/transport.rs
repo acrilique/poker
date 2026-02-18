@@ -27,9 +27,7 @@ pub trait TransportReader: Send + 'static {
     /// Receive the next text message.
     ///
     /// Returns `Ok(None)` when the connection is cleanly closed.
-    fn recv(
-        &mut self,
-    ) -> impl Future<Output = Result<Option<String>, TransportError>> + Send;
+    fn recv(&mut self) -> impl Future<Output = Result<Option<String>, TransportError>> + Send;
 }
 
 /// Write half of a transport connection.
@@ -37,10 +35,7 @@ pub trait TransportReader: Send + 'static {
 /// Implementations send text messages (typically JSON) to the remote peer.
 pub trait TransportWriter: Send + 'static {
     /// Send a text message to the remote peer.
-    fn send(
-        &mut self,
-        text: &str,
-    ) -> impl Future<Output = Result<(), TransportError>> + Send;
+    fn send(&mut self, text: &str) -> impl Future<Output = Result<(), TransportError>> + Send;
 }
 
 /// A bidirectional transport that can be split into independent read and write

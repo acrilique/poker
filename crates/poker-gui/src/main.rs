@@ -5,8 +5,7 @@ fn main() {
         .with_cfg(
             dioxus::desktop::Config::new()
                 .with_window(
-                    dioxus::desktop::tao::window::WindowBuilder::new()
-                        .with_title("pokerot"),
+                    dioxus::desktop::tao::window::WindowBuilder::new().with_title("pokerot"),
                 )
                 .with_menu(None),
         )
