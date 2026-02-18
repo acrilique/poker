@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/poker-core",
+    "crates/poker-tui",
+    "crates/poker-gui",
+    "crates/poker-server",
+    "crates/poker-ui",
+    "crates/poker-web",
+]
+
+[profile.release]
+opt-level = 3
+lto = true

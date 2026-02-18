@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@source "../src/**/*.{rs,html,css}";
+@source "../../poker-ui/src/**/*.{rs,html,css}";
+
+/* Card suit colors */
+.suit-red { color: #dc2626; }
+.suit-black { color: #1e293b; }
+
+/* Card styling */
+.card {
+    @apply inline-flex items-center justify-center rounded-lg border-2 border-gray-300 bg-white font-bold text-lg shadow-md;
+    width: 3.5rem;
+    height: 5rem;
+}
+.card-back {
+    @apply inline-flex items-center justify-center rounded-lg border-2 border-blue-400 bg-blue-600 text-white font-bold text-lg shadow-md;
+    width: 3.5rem;
+    height: 5rem;
+}
+.card-empty {
+    @apply inline-flex items-center justify-center rounded-lg border-2 border-dashed border-gray-400 bg-gray-100 text-gray-400 text-lg;
+    width: 3.5rem;
+    height: 5rem;
+}

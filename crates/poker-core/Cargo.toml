@@ -1,0 +1,31 @@
+[package]
+name = "poker-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core poker logic, protocol, networking, and game state"
+license = "MIT"
+
+[features]
+default = ["native"]
+# Native (non-WASM) support: TCP transport + WebSocket via tokio-tungstenite.
+native = ["dep:tokio-tungstenite", "dep:futures-util", "tokio/io-util", "tokio/net", "tokio/rt", "tokio/time"]
+# WASM WebSocket support via gloo-net.
+web = ["dep:gloo-net", "dep:wasm-bindgen-futures", "dep:futures-util", "dep:getrandom"]
+# Legacy TCP server + broadcast-based PRIVATE message routing.
+# Only needed if you want to run the old in-process TCP server.
+legacy-server = ["native"]
+
+[dependencies]
+rand = "0.10"
+tokio = { version = "1", features = ["sync", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio-tungstenite = { version = "0.28", optional = true }
+futures-util = { version = "0.3", optional = true }
+gloo-net = { version = "0.6", optional = true, features = ["websocket"] }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+getrandom = { version = "0.4", optional = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

@@ -1,0 +1,17 @@
+[package]
+name = "poker-tui"
+version = "0.1.0"
+edition = "2024"
+description = "TUI frontend for the multiplayer poker app"
+license = "MIT"
+
+[[bin]]
+name = "poker"
+path = "src/main.rs"
+
+[dependencies]
+poker-core = { path = "../poker-core" }
+clap = { version = "4.5.57", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+ratatui = "0.30"
+crossterm = "0.29"

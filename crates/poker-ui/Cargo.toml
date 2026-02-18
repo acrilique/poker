@@ -1,0 +1,10 @@
+[package]
+name = "poker-ui"
+version = "0.1.0"
+edition = "2024"
+description = "Shared Dioxus UI components for the poker app (desktop + web)"
+license = "MIT"
+
+[dependencies]
+poker-core = { path = "../poker-core", default-features = false }
+dioxus = "0.7"
