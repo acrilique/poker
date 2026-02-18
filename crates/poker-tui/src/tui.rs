@@ -47,6 +47,7 @@ pub enum UserIntent {
 // ---------------------------------------------------------------------------
 
 /// UI-layer state that lives alongside (but separate from) the game state.
+#[derive(Default)]
 struct TuiState {
     /// Raise amount input buffer
     raise_input: String,
@@ -62,18 +63,6 @@ struct TuiState {
     show_help: bool,
 }
 
-impl Default for TuiState {
-    fn default() -> Self {
-        Self {
-            raise_input: String::new(),
-            raise_cursor: 0,
-            selected_button: 0,
-            selected_raise_preset: None,
-            pending_all_in: false,
-            show_help: false,
-        }
-    }
-}
 
 impl TuiState {
     fn move_cursor_left(&mut self) {

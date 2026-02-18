@@ -34,8 +34,8 @@ fn default_ws_origin() -> String {
 pub fn App() -> Element {
     let screen = use_signal(|| Screen::Connection);
     let game_state = use_signal(|| ClientGameState::new(""));
-    let conn_error = use_signal(|| String::new());
-    let ws_origin = use_signal(|| default_ws_origin());
+    let conn_error = use_signal(String::new);
+    let ws_origin = use_signal(default_ws_origin);
 
     // Shared display mode for stacks (blinds vs chips). Default: blinds.
     use_context_provider(|| Signal::new(StackDisplayMode::Blinds));

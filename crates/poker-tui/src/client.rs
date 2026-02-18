@@ -44,17 +44,15 @@ pub async fn start_client(
     loop {
         match ctrl.recv().await {
             PollResult::Updated(changed) => {
-                if changed.phase || changed.players {
-                    if ctrl.state.our_player_id != 0 {
+                if (changed.phase || changed.players)
+                    && ctrl.state.our_player_id != 0 {
                         break; // Successfully joined.
                     }
-                }
                 // Check for room errors surfaced as events.
-                if let Some(last) = ctrl.state.events.back() {
-                    if let poker_core::game_state::GameEvent::ServerError { message } = last {
+                if let Some(last) = ctrl.state.events.back()
+                    && let poker_core::game_state::GameEvent::ServerError { message } = last {
                         return Err(message.clone().into());
                     }
-                }
             }
             PollResult::Unknown => {}
             PollResult::Error | PollResult::Disconnected => {

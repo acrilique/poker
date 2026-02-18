@@ -20,7 +20,7 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 pub fn App() -> Element {
     let screen = use_signal(|| Screen::Connection);
     let game_state = use_signal(|| ClientGameState::new(""));
-    let conn_error = use_signal(|| String::new());
+    let conn_error = use_signal(String::new);
 
     // Shared display mode for stacks (blinds vs chips). Default: blinds.
     use_context_provider(|| Signal::new(StackDisplayMode::Blinds));
@@ -80,12 +80,11 @@ pub fn App() -> Element {
                 match ctrl.recv().await {
                     PollResult::Updated(changed) => {
                         game_state.set(ctrl.state.clone());
-                        if changed.phase || changed.players {
-                            if ctrl.state.our_player_id != 0 {
+                        if (changed.phase || changed.players)
+                            && ctrl.state.our_player_id != 0 {
                                 screen.set(Screen::Game);
                                 break;
                             }
-                        }
                     }
                     PollResult::Unknown => {}
                     PollResult::Error | PollResult::Disconnected => {

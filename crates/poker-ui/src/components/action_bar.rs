@@ -10,7 +10,7 @@ use crate::{StackDisplayMode, UiMessage, format_stack};
 pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
     let gs = state.read();
     let coroutine = use_coroutine_handle::<UiMessage>();
-    let mut raise_input = use_signal(|| String::new());
+    let mut raise_input = use_signal(String::new);
     let display_mode: Signal<StackDisplayMode> = use_context();
     let mode = *display_mode.read();
     let bb = gs.big_blind;

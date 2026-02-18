@@ -75,7 +75,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             let joined = ServerMessage::JoinedGame {
                                 player_id: pid,
                                 chips: 1000,
-                                player_count: player_count,
+                                player_count,
                             };
                             let blind_config = {
                                 let room = rarc.lock().await;

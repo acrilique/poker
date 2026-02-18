@@ -117,6 +117,7 @@ impl fmt::Display for PlayerAction {
 ///
 /// When `interval_secs` is 0 (or `None` on the wire) blinds never increase.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub struct BlindConfig {
     /// Seconds between each blind increase (0 = disabled).
     #[serde(default)]
@@ -126,14 +127,6 @@ pub struct BlindConfig {
     pub increase_percent: u32,
 }
 
-impl Default for BlindConfig {
-    fn default() -> Self {
-        Self {
-            interval_secs: 0,
-            increase_percent: 0,
-        }
-    }
-}
 
 impl BlindConfig {
     /// Returns `true` when blind increases are enabled.

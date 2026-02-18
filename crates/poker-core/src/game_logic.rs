@@ -243,8 +243,8 @@ impl GameState {
             };
             if should_increase {
                 let pct = self.blind_config.increase_percent;
-                self.small_blind = self.small_blind + (self.small_blind * pct + 99) / 100;
-                self.big_blind = self.big_blind + (self.big_blind * pct + 99) / 100;
+                self.small_blind = self.small_blind + (self.small_blind * pct).div_ceil(100);
+                self.big_blind = self.big_blind + (self.big_blind * pct).div_ceil(100);
                 self.last_blind_increase = Some(Instant::now());
                 messages.push(ServerMessage::BlindsIncreased {
                     small_blind: self.small_blind,

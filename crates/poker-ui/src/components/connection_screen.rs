@@ -17,10 +17,10 @@ pub fn ConnectionScreen(
 ) -> Element {
     let mut name = use_signal(|| "Player".to_string());
     let mut server_url = use_signal(move || default_server.clone());
-    let mut room_id = use_signal(|| String::new());
-    let mut validation_error = use_signal(|| String::new());
-    let mut blind_interval_mins = use_signal(|| String::new());
-    let mut blind_increase_pct = use_signal(|| String::new());
+    let mut room_id = use_signal(String::new);
+    let mut validation_error = use_signal(String::new);
+    let mut blind_interval_mins = use_signal(String::new);
+    let mut blind_increase_pct = use_signal(String::new);
     let coroutine = use_coroutine_handle::<UiMessage>();
 
     let mut on_submit = move |create: bool| {
