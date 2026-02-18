@@ -29,7 +29,9 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_sb = player.id == gs.small_blind_id;
                         let is_bb = player.id == gs.big_blind_id;
                         let is_sat_out = gs.is_player_sitting_out(player.id);
+                        let is_active_turn = gs.turn_timer_player == Some(player.id);
                         let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
+                        let border = if is_active_turn { "ring-2 ring-emerald-500" } else { "" };
 
                         // Compute effective stack (chips minus current bet) and bet amount.
                         let bet = gs.player_bets.get(&player.id).copied().unwrap_or(0).min(player.chips);
@@ -38,7 +40,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let bet_text = if bet > 0 { Some(format_stack(bet, bb, mode)) } else { None };
 
                         rsx! {
-                            div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg}",
+                            div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border}",
                                 div { class: "flex items-center gap-2",
                                     if is_sb {
                                         span { class: "text-yellow-400 text-xs font-bold", "SB" }
