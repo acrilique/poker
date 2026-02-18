@@ -118,12 +118,17 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                 // Raise input + button
                 if can_raise || can_allin {
                     div { class: "flex items-center gap-2",
-                        input {
-                            class: "bg-gray-700 rounded-lg px-3 py-2 text-white w-24 outline-none focus:ring-2 focus:ring-emerald-500",
-                            r#type: "number",
-                            placeholder: if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "Chips" },
-                            value: "{raise_input}",
-                            oninput: move |e| raise_input.set(e.value()),
+                        div { class: "flex items-center bg-gray-700 rounded-lg focus-within:ring-2 focus-within:ring-emerald-500",
+                            input {
+                                class: "bg-transparent px-3 py-2 text-white w-20 outline-none",
+                                r#type: "number",
+                                placeholder: "Amount",
+                                value: "{raise_input}",
+                                oninput: move |e| raise_input.set(e.value()),
+                            }
+                            span { class: "pr-3 text-gray-400 text-sm select-none",
+                                if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "chips" }
+                            }
                         }
                         button {
                             class: "px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold text-white transition",
