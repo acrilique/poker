@@ -154,6 +154,14 @@ fn render_event(event: &GameEvent) -> Element {
             format!("Player {player_id} has {timeout_secs}s to act"),
             category_color(LogCategory::System),
         ),
+        GameEvent::PlayerSatOut { player_id } => (
+            format!("Player #{player_id} is sitting out"),
+            category_color(LogCategory::Info),
+        ),
+        GameEvent::PlayerSatIn { player_id } => (
+            format!("Player #{player_id} is back in"),
+            category_color(LogCategory::Info),
+        ),
     };
 
     rsx! {

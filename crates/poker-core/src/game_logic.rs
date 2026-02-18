@@ -65,6 +65,8 @@ pub struct Player {
     pub hole_cards: Option<(Card, Card)>,
     /// Amount bet in current betting round.
     pub current_bet: u32,
+    /// Whether the player is sitting out (auto-check/fold each turn).
+    pub sitting_out: bool,
 }
 
 /// Game phase.
@@ -156,6 +158,7 @@ impl GameState {
             status: PlayerStatus::Waiting,
             hole_cards: None,
             current_bet: 0,
+            sitting_out: false,
         };
         self.players.insert(player.id, player.clone());
         self.player_order.push(player.id);
@@ -170,6 +173,28 @@ impl GameState {
 
     pub fn player_count(&self) -> usize {
         self.players.len()
+    }
+
+    /// Set a player to sitting out.
+    pub fn set_sitting_out(&mut self, player_id: u32) {
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.sitting_out = true;
+        }
+    }
+
+    /// Set a player back to active (no longer sitting out).
+    pub fn set_sitting_in(&mut self, player_id: u32) {
+        if let Some(player) = self.players.get_mut(&player_id) {
+            player.sitting_out = false;
+        }
+    }
+
+    /// Check whether the current player is sitting out.
+    pub fn is_current_player_sitting_out(&self) -> bool {
+        self.current_player_id()
+            .and_then(|id| self.players.get(&id))
+            .map(|p| p.sitting_out)
+            .unwrap_or(false)
     }
 
     /// Get active players (not folded, not out).

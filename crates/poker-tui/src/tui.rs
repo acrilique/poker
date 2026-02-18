@@ -802,6 +802,12 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::TurnTimerStarted { player_id, timeout_secs } => {
             format!("⏱ Player #{} has {}s to act", player_id, timeout_secs)
         }
+        GameEvent::PlayerSatOut { player_id } => {
+            format!("💤 Player #{} is sitting out", player_id)
+        }
+        GameEvent::PlayerSatIn { player_id } => {
+            format!("✅ Player #{} is back in", player_id)
+        }
     }
 }
 

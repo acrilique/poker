@@ -313,6 +313,26 @@ async fn process_client_message(
         ClientMessage::AllIn => {
             process_action(player_id, PlayerAction::AllIn, 0, room_arc).await;
         }
+
+        ClientMessage::SitOut => {
+            let room = room_arc.lock().await;
+            let mut gs = room.game_state.lock().await;
+            if gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(true) {
+                return; // already sitting out or unknown player
+            }
+            gs.set_sitting_out(player_id);
+            room.broadcast(&ServerMessage::PlayerSatOut { player_id });
+        }
+
+        ClientMessage::SitIn => {
+            let room = room_arc.lock().await;
+            let mut gs = room.game_state.lock().await;
+            if !gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(false) {
+                return; // already sitting in or unknown player
+            }
+            gs.set_sitting_in(player_id);
+            room.broadcast(&ServerMessage::PlayerSatIn { player_id });
+        }
     }
 }
 
@@ -612,6 +632,9 @@ fn send_turn_notification(gs: &GameState, room: &Room) {
 /// Increments the room's turn counter so any previously-spawned timer
 /// becomes a no-op, then spawns a new background task that will force a
 /// check-or-fold when the timeout elapses.
+///
+/// If the current player is sitting out, their action is resolved
+/// immediately (auto-check or auto-fold) instead of waiting for input.
 fn notify_turn_and_start_timer(
     gs: &GameState,
     room: &Room,
@@ -626,6 +649,24 @@ fn notify_turn_and_start_timer(
 
     // Increment the turn counter to invalidate any stale timer tasks.
     let turn = room.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+    if gs.is_current_player_sitting_out() {
+        // Sitting-out player: resolve immediately (no timer broadcast).
+        let valid = gs.valid_actions(current_id);
+        let action = if valid.contains(&PlayerAction::Check) {
+            PlayerAction::Check
+        } else {
+            PlayerAction::Fold
+        };
+        let room_arc_clone = Arc::clone(room_arc);
+        tokio::spawn(async move {
+            // Small delay so the turn notification is delivered first.
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tracing::info!(player = current_id, ?action, "Sitting-out player, auto-acting");
+            process_action(current_id, action, 0, &room_arc_clone).await;
+        });
+        return;
+    }
 
     // Broadcast the timer start to all players so UIs can show a countdown.
     room.broadcast(&ServerMessage::TurnTimerStarted {
@@ -647,6 +688,9 @@ fn notify_turn_and_start_timer(
 }
 
 /// Force a check-or-fold for a player whose turn timer has expired.
+///
+/// If the forced action is a fold (i.e. the player could not simply check),
+/// the player is also automatically sat out.
 async fn force_timeout_action(
     room_arc: Arc<Mutex<Room>>,
     expected_turn: u64,
@@ -679,6 +723,17 @@ async fn force_timeout_action(
             PlayerAction::Fold
         }
     };
+
+    // If forced to fold, automatically sit the player out.
+    if action == PlayerAction::Fold {
+        let room = room_arc.lock().await;
+        let mut gs = room.game_state.lock().await;
+        if !gs.players.get(&player_id).map(|p| p.sitting_out).unwrap_or(true) {
+            gs.set_sitting_out(player_id);
+            room.broadcast(&ServerMessage::PlayerSatOut { player_id });
+            tracing::info!(player = player_id, "Auto sitting out after timeout fold");
+        }
+    }
 
     tracing::info!(player = player_id, ?action, "Turn timer expired, forcing action");
 

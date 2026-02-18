@@ -183,6 +183,12 @@ pub enum ClientMessage {
     /// Go all-in
     AllIn,
 
+    /// Request to sit out (auto-fold/check each turn).
+    SitOut,
+
+    /// Request to sit back in.
+    SitIn,
+
     /// Ping to check connection
     Ping,
 }
@@ -292,6 +298,12 @@ pub enum ServerMessage {
         player_id: u32,
         timeout_secs: u32,
     },
+
+    /// A player is now sitting out.
+    PlayerSatOut { player_id: u32 },
+
+    /// A player is back in (no longer sitting out).
+    PlayerSatIn { player_id: u32 },
 
     /// A room was successfully created.
     RoomCreated { room_id: String },

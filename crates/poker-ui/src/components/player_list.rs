@@ -28,6 +28,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_us = player.id == gs.our_player_id;
                         let is_sb = player.id == gs.small_blind_id;
                         let is_bb = player.id == gs.big_blind_id;
+                        let is_sat_out = gs.is_player_sitting_out(player.id);
                         let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
 
                         // Compute effective stack (chips minus current bet) and bet amount.
@@ -46,6 +47,9 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                                         span { class: "text-blue-400 text-xs font-bold", "BB" }
                                     }
                                     span { class: if is_us { "font-semibold text-emerald-300" } else { "text-white" }, "{player.name}" }
+                                    if is_sat_out {
+                                        span { class: "text-gray-500 text-xs italic", "(away)" }
+                                    }
                                 }
                                 div {
                                     class: "flex items-center gap-1.5 cursor-pointer select-none",

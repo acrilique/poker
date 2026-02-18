@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::poker::{Board, Hand, HandRank};
 use crate::protocol::{BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage};
@@ -93,6 +93,10 @@ pub enum GameEvent {
     BlindsIncreased { small_blind: u32, big_blind: u32 },
     /// A player's turn timer has started (broadcast to all).
     TurnTimerStarted { player_id: u32, timeout_secs: u32 },
+    /// A player sat out.
+    PlayerSatOut { player_id: u32 },
+    /// A player sat back in.
+    PlayerSatIn { player_id: u32 },
 }
 
 impl GameEvent {
@@ -128,6 +132,8 @@ impl GameEvent {
             Self::Text { category, .. } => *category,
             Self::BlindsIncreased { .. } => LogCategory::System,
             Self::TurnTimerStarted { .. } => LogCategory::System,
+            Self::PlayerSatOut { .. } => LogCategory::Info,
+            Self::PlayerSatIn { .. } => LogCategory::Info,
         }
     }
 }
@@ -216,6 +222,8 @@ pub struct ClientGameState {
     pub turn_timer_player: Option<u32>,
     /// Duration (in seconds) of the current turn timer.
     pub turn_timer_secs: u32,
+    /// Set of player IDs currently sitting out.
+    pub sitting_out_players: HashSet<u32>,
 }
 
 impl ClientGameState {
@@ -252,6 +260,7 @@ impl ClientGameState {
             player_bets: HashMap::new(),
             turn_timer_player: None,
             turn_timer_secs: 0,
+            sitting_out_players: HashSet::new(),
         }
     }
 
@@ -271,6 +280,16 @@ impl ClientGameState {
     /// Returns true if the given action is currently valid.
     pub fn has_action(&self, action: PlayerAction) -> bool {
         self.valid_actions.contains(&action)
+    }
+
+    /// Returns true if we (the local player) are currently sitting out.
+    pub fn is_sitting_out(&self) -> bool {
+        self.sitting_out_players.contains(&self.our_player_id)
+    }
+
+    /// Returns true if the given player is sitting out.
+    pub fn is_player_sitting_out(&self, player_id: u32) -> bool {
+        self.sitting_out_players.contains(&player_id)
     }
 
     /// Evaluate the current best hand rank from the player's hole cards and community cards.
@@ -565,6 +584,20 @@ impl ClientGameState {
                     timeout_secs: *timeout_secs,
                 });
                 changed.timer = true;
+            }
+            ServerMessage::PlayerSatOut { player_id } => {
+                self.sitting_out_players.insert(*player_id);
+                self.add_event(GameEvent::PlayerSatOut {
+                    player_id: *player_id,
+                });
+                changed.players = true;
+            }
+            ServerMessage::PlayerSatIn { player_id } => {
+                self.sitting_out_players.remove(player_id);
+                self.add_event(GameEvent::PlayerSatIn {
+                    player_id: *player_id,
+                });
+                changed.players = true;
             }
         }
 

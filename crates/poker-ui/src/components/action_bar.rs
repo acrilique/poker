@@ -1,8 +1,8 @@
-//! Action bar — fold/check, call, raise with presets.
+//! Action bar — fold/check, call, raise with presets, sit out toggle.
 
 use dioxus::prelude::*;
 use poker_core::game_state::{ClientGameState, RaisePreset, RAISE_PRESETS};
-use poker_core::protocol::PlayerAction;
+use poker_core::protocol::{ClientMessage, PlayerAction};
 
 use crate::{format_stack, StackDisplayMode, UiMessage};
 
@@ -14,12 +14,22 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
     let display_mode: Signal<StackDisplayMode> = use_context();
     let mode = *display_mode.read();
     let bb = gs.big_blind;
+    let is_sitting_out = gs.is_sitting_out();
+    let game_started = gs.game_started;
 
     // Only show when it's our turn.
     if !gs.is_our_turn {
         return rsx! {
-            div { class: "h-16 bg-gray-800 border-t border-gray-700 flex items-center justify-center text-gray-500 text-sm",
-                "Waiting for your turn…"
+            div { class: "h-16 bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-4 text-gray-500 text-sm",
+                if is_sitting_out {
+                    "Sitting out…"
+                } else {
+                    "Waiting for your turn…"
+                }
+                // Sit out / Sit in toggle (always visible when game is started)
+                if game_started {
+                    { sit_out_button(is_sitting_out, coroutine) }
+                }
             }
         };
     }
@@ -152,6 +162,42 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                     }
                 }
             }
+
+            // Sit out / Sit in toggle
+            if game_started {
+                div { class: "flex justify-center",
+                    { sit_out_button(is_sitting_out, coroutine) }
+                }
+            }
+        }
+    }
+}
+
+/// Render a sit-out / sit-in toggle button.
+fn sit_out_button(is_sitting_out: bool, coroutine: Coroutine<UiMessage>) -> Element {
+    let (label, class) = if is_sitting_out {
+        (
+            "Sit In",
+            "px-3 py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-semibold text-white transition",
+        )
+    } else {
+        (
+            "Sit Out",
+            "px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded-lg text-xs font-semibold text-white transition",
+        )
+    };
+
+    rsx! {
+        button {
+            class: "{class}",
+            onclick: move |_| {
+                if is_sitting_out {
+                    coroutine.send(UiMessage::Action(ClientMessage::SitIn));
+                } else {
+                    coroutine.send(UiMessage::Action(ClientMessage::SitOut));
+                }
+            },
+            "{label}"
         }
     }
 }
