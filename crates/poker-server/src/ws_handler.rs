@@ -79,6 +79,22 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             send_one(&ws_sink, &ServerMessage::RoomJoined { room_id: rid.clone() }).await;
                             send_one(&ws_sink, &joined).await;
 
+                            // Send the full player list so the newcomer sees existing participants.
+                            {
+                                let room = rarc.lock().await;
+                                let gs = room.game_state.lock().await;
+                                let players: Vec<poker_core::protocol::PlayerInfo> = gs
+                                    .players
+                                    .values()
+                                    .map(|p| poker_core::protocol::PlayerInfo {
+                                        id: p.id,
+                                        name: p.name.clone(),
+                                        chips: p.chips,
+                                    })
+                                    .collect();
+                                send_one(&ws_sink, &ServerMessage::PlayerList { players }).await;
+                            }
+
                             room_id = Some(rid.clone());
                             player_id = Some(pid);
                             player_rx = Some(rx);
