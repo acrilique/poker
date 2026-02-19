@@ -202,85 +202,97 @@ pub fn App() -> Element {
                     )
                     .await;
                     clear_session();
-                    return;
+                    // Fall through to the loop below so the user can
+                    // create/join again without reloading.
                 } else {
                     clear_session();
                 }
             }
 
-            // ── Normal flow: wait for a Connect message ──────────────────
-            let (name, server_url, room_id, create, blind_config) = loop {
-                if let Some(UiMessage::Connect {
-                    name,
-                    server_url,
-                    room_id,
-                    create,
-                    blind_config,
-                }) = rx.next().await
-                {
-                    break (name, server_url, room_id, create, blind_config);
-                }
-            };
-
-            // Build WS URL and attempt connection.
-            conn_error.set(String::new());
-            let ws_url = format!("{server_url}/ws");
-            let result = ClientController::connect_ws(&ws_url, &name).await;
-
-            let mut ctrl = match result {
-                Ok(c) => c,
-                Err(e) => {
-                    conn_error.set(format!("Connection failed: {e}"));
-                    return;
-                }
-            };
-
-            // Send CreateRoom (if requested) then JoinRoom.
-            if create {
-                ctrl.send(ClientMessage::CreateRoom {
-                    room_id: room_id.clone(),
-                    blind_config,
-                });
-            }
-            ctrl.send(ClientMessage::JoinRoom {
-                room_id: room_id.clone(),
-                name: name.clone(),
-            });
-
-            // Wait for room confirmation before switching to game screen.
+            // ── Main coroutine loop: keeps running so we can handle
+            //    successive Connect requests without a page reload. ────────
             loop {
-                match ctrl.recv().await {
-                    PollResult::Updated(changed) => {
-                        game_state.set(ctrl.state.clone());
-                        if (changed.phase || changed.players)
-                            && ctrl.state.our_player_id != 0 {
-                                // Persist session for reconnection.
-                                save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
-                                screen.set(Screen::Game);
-                                break;
-                            }
-                    }
-                    PollResult::Unknown => {}
-                    PollResult::Error | PollResult::Disconnected => {
-                        conn_error.set("Disconnected before joining room".to_string());
-                        return;
-                    }
-                    PollResult::Empty => {}
-                }
-            }
+                screen.set(Screen::Connection);
+                game_state.set(ClientGameState::new(""));
 
-            // Main game loop with reconnection support.
-            run_with_reconnect(
-                &mut ctrl,
-                &mut rx,
-                &mut game_state,
-                &mut screen,
-                &ws_url,
-                &room_id,
-                &name,
-            )
-            .await;
-            clear_session();
+                // Wait for a Connect message from the connection screen.
+                let (name, server_url, room_id, create, blind_config) = loop {
+                    if let Some(UiMessage::Connect {
+                        name,
+                        server_url,
+                        room_id,
+                        create,
+                        blind_config,
+                    }) = rx.next().await
+                    {
+                        break (name, server_url, room_id, create, blind_config);
+                    }
+                };
+
+                // Build WS URL and attempt connection.
+                conn_error.set(String::new());
+                let ws_url = format!("{server_url}/ws");
+                let result = ClientController::connect_ws(&ws_url, &name).await;
+
+                let mut ctrl = match result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        conn_error.set(format!("Connection failed: {e}"));
+                        continue;
+                    }
+                };
+
+                // Send CreateRoom (if requested) then JoinRoom.
+                if create {
+                    ctrl.send(ClientMessage::CreateRoom {
+                        room_id: room_id.clone(),
+                        blind_config,
+                    });
+                }
+                ctrl.send(ClientMessage::JoinRoom {
+                    room_id: room_id.clone(),
+                    name: name.clone(),
+                });
+
+                // Wait for room confirmation before switching to game screen.
+                let joined = loop {
+                    match ctrl.recv().await {
+                        PollResult::Updated(changed) => {
+                            game_state.set(ctrl.state.clone());
+                            if (changed.phase || changed.players)
+                                && ctrl.state.our_player_id != 0 {
+                                    // Persist session for reconnection.
+                                    save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
+                                    screen.set(Screen::Game);
+                                    break true;
+                                }
+                        }
+                        PollResult::Unknown => {}
+                        PollResult::Error | PollResult::Disconnected => {
+                            conn_error.set("Disconnected before joining room".to_string());
+                            break false;
+                        }
+                        PollResult::Empty => {}
+                    }
+                };
+
+                if !joined {
+                    continue;
+                }
+
+                // Main game loop with reconnection support.
+                run_with_reconnect(
+                    &mut ctrl,
+                    &mut rx,
+                    &mut game_state,
+                    &mut screen,
+                    &ws_url,
+                    &room_id,
+                    &name,
+                )
+                .await;
+                clear_session();
+            }
         }
     });
 
