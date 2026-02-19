@@ -8,7 +8,7 @@
 
 /* Card styling */
 .card {
-    @apply inline-flex items-center justify-center rounded-lg border-2 border-gray-300 bg-white font-bold text-lg shadow-md;
+    @apply inline-flex items-center justify-center rounded-lg border-2 border-gray-300 bg-white font-bold text-lg shadow-md whitespace-nowrap;
     width: 3.5rem;
     height: 5rem;
 }
