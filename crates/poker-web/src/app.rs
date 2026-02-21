@@ -315,20 +315,67 @@ pub fn App() -> Element {
                             player_list::PlayerList { state: game_state }
                         }
                         // Main area
-                        div { class: "flex-1 flex flex-col",
+                        div { class: "flex-1 flex flex-col relative",
                             // Game table (top part, takes available space)
                             div { class: "flex-1 flex flex-col",
                                 game_table::GameTable { state: game_state }
                             }
                             // Action bar
                             action_bar::ActionBar { state: game_state }
-                            // Event log (fixed height at bottom)
-                            div { class: "h-48 border-t border-gray-700",
+                            // Event log: always visible on large screens, hidden overlay on small
+                            div { class: "hidden lg:block h-48 border-t border-gray-700",
                                 event_log::EventLog { state: game_state }
+                            }
+                            // Mobile log overlay (managed by the GameLogOverlay component)
+                            div { class: "lg:hidden",
+                                GameLogOverlay { state: game_state }
                             }
                         }
                     }
                 },
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mobile log overlay — toggle button + full overlay
+// ---------------------------------------------------------------------------
+
+/// A small component that shows a "Logs" toggle button at the bottom-right
+/// of the game area. When tapped, an overlay with the event log covers the
+/// board + action bar.
+#[component]
+fn GameLogOverlay(state: Signal<ClientGameState>) -> Element {
+    let mut show_log = use_signal(|| false);
+    let visible = *show_log.read();
+
+    rsx! {
+        if visible {
+            // Overlay covering the main area
+            div {
+                class: "absolute inset-0 z-40 bg-gray-900/95 flex flex-col",
+                // Log content (full area)
+                div { class: "flex-1 overflow-y-auto",
+                    event_log::EventLog { state }
+                }
+                // Close button pinned to the same bottom-right spot
+                div { class: "absolute bottom-14 right-3",
+                    button {
+                        class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
+                        onclick: move |_| show_log.set(false),
+                        "✕ Close"
+                    }
+                }
+            }
+        } else {
+            // Toggle button pinned to the bottom-right
+            div { class: "absolute bottom-14 right-3 z-30",
+                button {
+                    class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
+                    onclick: move |_| show_log.set(true),
+                    "📋 Logs"
+                }
             }
         }
     }
