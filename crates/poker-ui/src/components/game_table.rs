@@ -18,10 +18,10 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
     let pot_text = format_stack(gs.pot, bb, mode);
 
     rsx! {
-        div { class: "flex flex-col items-center justify-center h-full gap-6 p-4",
+        div { class: "flex flex-col items-center h-full gap-2 p-2 lg:justify-center lg:gap-6 lg:p-4",
             // Room ID + Stage / hand info
-            div { class: "flex items-center gap-4 text-gray-400 text-sm tracking-wide uppercase",
-                div { class: "bg-gray-800 border border-gray-600 rounded px-3 py-1 select-all cursor-pointer",
+            div { class: "flex items-center justify-between w-full px-1 mb-1 text-gray-400 text-xs tracking-wide uppercase lg:mb-0 lg:justify-center lg:gap-4 lg:text-sm lg:w-auto lg:px-0",
+                div { class: "bg-gray-800 border border-gray-600 rounded px-2 py-0.5 select-all cursor-pointer lg:px-3 lg:py-1",
                     title: "Room ID — click to select",
                     "Room: {gs.room_id}"
                 }
@@ -41,7 +41,7 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
 
             // Pot
             div {
-                class: "bg-gray-800 rounded-full px-6 py-2 text-lg font-semibold text-yellow-400 shadow cursor-pointer hover:brightness-125 select-none",
+                class: "bg-gray-800 rounded-full px-4 py-1 text-sm font-semibold text-yellow-400 shadow cursor-pointer hover:brightness-125 select-none lg:px-6 lg:py-2 lg:text-lg",
                 title: "Click to toggle chips / BB",
                 onclick: move |_| {
                     let new_mode = display_mode.read().toggle();
@@ -51,7 +51,7 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
             }
 
             // Hole cards + hand rank
-            div { class: "flex flex-col items-center gap-1 mt-2",
+            div { class: "flex flex-col items-center gap-1",
                 div { class: "flex gap-2",
                     if let Some(cards) = hole {
                         card::Card { card: cards[0] }

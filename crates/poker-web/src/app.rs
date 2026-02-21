@@ -354,28 +354,17 @@ fn GameLogOverlay(state: Signal<ClientGameState>) -> Element {
         if visible {
             // Overlay covering the main area
             div {
-                class: "absolute inset-0 z-40 bg-gray-900/95 flex flex-col",
-                // Log content (full area)
-                div { class: "flex-1 overflow-y-auto",
-                    event_log::EventLog { state }
-                }
-                // Close button pinned to the same bottom-right spot
-                div { class: "absolute bottom-14 right-3",
-                    button {
-                        class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
-                        onclick: move |_| show_log.set(false),
-                        "✕ Close"
-                    }
-                }
+                class: "absolute inset-0 z-40 bg-gray-900/95 overflow-y-auto",
+                event_log::EventLog { state }
             }
-        } else {
-            // Toggle button pinned to the bottom-right
-            div { class: "absolute bottom-14 right-3 z-30",
-                button {
-                    class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
-                    onclick: move |_| show_log.set(true),
-                    "📋 Logs"
-                }
+        }
+        // Toggle button always pinned to the bottom-right of the main area
+        // Rendered after the overlay so it paints on top
+        div { class: "absolute bottom-14 right-3 z-50",
+            button {
+                class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
+                onclick: move |_| show_log.set(!visible),
+                if visible { "✕ Close" } else { "📋 Logs" }
             }
         }
     }
