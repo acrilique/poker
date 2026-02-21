@@ -29,7 +29,7 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
             }
 
             // Community cards
-            div { class: "flex gap-2",
+            div { class: "flex gap-2 lg:gap-3",
                 for i in 0..5 {
                     if let Some(c) = community.get(i) {
                         card::Card { card: *c }
@@ -52,7 +52,7 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
 
             // Hole cards + hand rank
             div { class: "flex flex-col items-center gap-1",
-                div { class: "flex gap-2",
+                div { class: "flex gap-2 lg:gap-3",
                     if let Some(cards) = hole {
                         card::Card { card: cards[0] }
                         card::Card { card: cards[1] }

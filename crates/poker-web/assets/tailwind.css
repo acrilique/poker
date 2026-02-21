@@ -678,6 +678,11 @@
       justify-content: center;
     }
   }
+  .lg\:gap-3 {
+    @media (width >= 64rem) {
+      gap: calc(var(--spacing) * 3);
+    }
+  }
   .lg\:gap-4 {
     @media (width >= 64rem) {
       gap: calc(var(--spacing) * 4);
@@ -815,6 +820,13 @@
   color: var(--color-gray-400);
   width: 3.5rem;
   height: 5rem;
+}
+@media (min-width: 1024px) {
+  .card, .card-back, .card-empty {
+    width: 5rem;
+    height: 7rem;
+    font-size: 1.375rem;
+  }
 }
 @property --tw-border-style {
   syntax: "*";
