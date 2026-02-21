@@ -316,10 +316,6 @@
     border-right-style: var(--tw-border-style);
     border-right-width: 1px;
   }
-  .border-b {
-    border-bottom-style: var(--tw-border-style);
-    border-bottom-width: 1px;
-  }
   .border-gray-600 {
     border-color: var(--color-gray-600);
   }
@@ -611,6 +607,18 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem 1.5rem;
+  }
+}
+@media (orientation: portrait) and (max-width: 600px) {
+  .portrait-rotate {
+    transform: rotate(90deg);
+    transform-origin: top left;
+    width: 100vh;
+    height: 100vw;
+    position: fixed;
+    top: 0;
+    left: 100vw;
+    overflow: auto;
   }
 }
 .suit-red {

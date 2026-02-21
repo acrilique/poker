@@ -16,6 +16,20 @@
     }
 }
 
+/* Force landscape on small portrait screens during game */
+@media (orientation: portrait) and (max-width: 600px) {
+    .portrait-rotate {
+        transform: rotate(90deg);
+        transform-origin: top left;
+        width: 100vh;
+        height: 100vw;
+        position: fixed;
+        top: 0;
+        left: 100vw;
+        overflow: auto;
+    }
+}
+
 /* Card suit colors */
 .suit-red { color: #dc2626; }
 .suit-black { color: #1e293b; }

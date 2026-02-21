@@ -309,7 +309,7 @@ pub fn App() -> Element {
                     connection_screen::ConnectionScreen { error: conn_error, default_server: origin }
                 },
                 Screen::Game => rsx! {
-                    div { class: "flex h-screen",
+                    div { class: "flex h-screen portrait-rotate",
                         // Left sidebar: player list
                         div { class: "w-64 bg-gray-800 border-r border-gray-700 flex flex-col",
                             player_list::PlayerList { state: game_state }

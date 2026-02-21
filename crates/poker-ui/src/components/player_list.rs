@@ -16,11 +16,6 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
 
     rsx! {
         div { class: "flex flex-col h-full",
-            // Header
-            div { class: "p-4 border-b border-gray-700",
-                h2 { class: "text-lg font-bold text-emerald-400", "Players" }
-            }
-
             // Player entries
             div { class: "flex-1 overflow-y-auto p-2",
                 for player in gs.players.iter() {
