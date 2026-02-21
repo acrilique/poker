@@ -20,7 +20,10 @@ use poker_ui::{Screen, StackDisplayMode, UiMessage};
 // Root component
 // ---------------------------------------------------------------------------
 
-const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+const TAILWIND_CSS: Asset = asset!(
+    "/assets/tailwind.css",
+    AssetOptions::css().with_preload(true).with_static_head(true)
+);
 
 /// Maximum number of automatic reconnection attempts before giving up.
 const MAX_RECONNECT_ATTEMPTS: u32 = 5;
