@@ -142,13 +142,13 @@ pub fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }
-        div { class: "min-h-screen h-screen bg-gray-900 text-white font-sans",
+        div { class: "min-h-screen bg-gray-900 text-white font-sans",
             match &*screen.read() {
                 Screen::Connection => rsx! {
                     connection_screen::ConnectionScreen { error: conn_error }
                 },
                 Screen::Game => rsx! {
-                    div { class: "flex h-full",
+                    div { class: "flex h-screen",
                         // Left sidebar: player list
                         div { class: "w-64 bg-gray-800 border-r border-gray-700 flex flex-col",
                             player_list::PlayerList { state: game_state }

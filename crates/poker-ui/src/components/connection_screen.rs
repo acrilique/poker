@@ -73,73 +73,77 @@ pub fn ConnectionScreen(
     let val_err = validation_error.read().clone();
 
     rsx! {
-        div { class: "flex items-center justify-center h-screen",
-            div { class: "bg-gray-800 rounded-2xl shadow-2xl p-10 w-96 flex flex-col gap-6",
+        div { class: "min-h-screen flex items-center justify-center p-4",
+            div { class: "bg-gray-800 w-full max-w-sm rounded-2xl shadow-2xl p-6 flex flex-col gap-4 sm:p-8 sm:gap-5 conn-card",
                 h1 { class: "text-3xl font-bold text-center text-emerald-400", "♠ Poker ♥" }
 
-                // Name input
-                div { class: "flex flex-col gap-1",
-                    label { class: "text-sm text-gray-400", "Player name" }
-                    input {
-                        class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
-                        r#type: "text",
-                        value: "{name}",
-                        oninput: move |e| name.set(e.value()),
-                    }
-                }
+                // Form fields — single column normally, two columns in landscape
+                div { class: "flex flex-col gap-4 conn-fields",
 
-                // Server address input
-                div { class: "flex flex-col gap-1",
-                    label { class: "text-sm text-gray-400", "Server address" }
-                    input {
-                        class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
-                        r#type: "text",
-                        value: "{server_url}",
-                        oninput: move |e| server_url.set(e.value()),
-                    }
-                }
-
-                // Room ID input
-                div { class: "flex flex-col gap-1",
-                    label { class: "text-sm text-gray-400", "Room ID" }
-                    input {
-                        class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
-                        r#type: "text",
-                        placeholder: "e.g. myroom42",
-                        value: "{room_id}",
-                        oninput: move |e| room_id.set(e.value()),
-                    }
-                    p { class: "text-xs text-gray-500", "Alphanumeric, up to 19 characters" }
-                }
-
-                // Blind increase settings (applies when creating a room)
-                div { class: "flex flex-col gap-2",
-                    label { class: "text-sm text-gray-400", "Blind increases (host only)" }
-                    div { class: "flex gap-2",
-                        div { class: "flex-1 flex flex-col gap-1",
-                            input {
-                                class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
-                                r#type: "number",
-                                min: "0",
-                                placeholder: "Minutes",
-                                value: "{blind_interval_mins}",
-                                oninput: move |e| blind_interval_mins.set(e.value()),
-                            }
-                            p { class: "text-xs text-gray-500", "Interval (min)" }
-                        }
-                        div { class: "flex-1 flex flex-col gap-1",
-                            input {
-                                class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
-                                r#type: "number",
-                                min: "0",
-                                placeholder: "Percent",
-                                value: "{blind_increase_pct}",
-                                oninput: move |e| blind_increase_pct.set(e.value()),
-                            }
-                            p { class: "text-xs text-gray-500", "Increase (%)" }
+                    // Name input
+                    div { class: "flex flex-col gap-1",
+                        label { class: "text-sm text-gray-400", "Player name" }
+                        input {
+                            class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
+                            r#type: "text",
+                            value: "{name}",
+                            oninput: move |e| name.set(e.value()),
                         }
                     }
-                    p { class: "text-xs text-gray-500", "Leave empty or 0 to keep blinds fixed" }
+
+                    // Server address input
+                    div { class: "flex flex-col gap-1",
+                        label { class: "text-sm text-gray-400", "Server address" }
+                        input {
+                            class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
+                            r#type: "text",
+                            value: "{server_url}",
+                            oninput: move |e| server_url.set(e.value()),
+                        }
+                    }
+
+                    // Room ID input
+                    div { class: "flex flex-col gap-1",
+                        label { class: "text-sm text-gray-400", "Room ID" }
+                        input {
+                            class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500",
+                            r#type: "text",
+                            placeholder: "e.g. myroom42",
+                            value: "{room_id}",
+                            oninput: move |e| room_id.set(e.value()),
+                        }
+                        p { class: "text-xs text-gray-500", "Alphanumeric, up to 19 characters" }
+                    }
+
+                    // Blind increase settings (applies when creating a room)
+                    div { class: "flex flex-col gap-2",
+                        label { class: "text-sm text-gray-400", "Blind increases (host only)" }
+                        div { class: "flex gap-2",
+                            div { class: "flex-1 flex flex-col gap-1",
+                                input {
+                                    class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
+                                    r#type: "number",
+                                    min: "0",
+                                    placeholder: "Minutes",
+                                    value: "{blind_interval_mins}",
+                                    oninput: move |e| blind_interval_mins.set(e.value()),
+                                }
+                                p { class: "text-xs text-gray-500", "Interval (min)" }
+                            }
+                            div { class: "flex-1 flex flex-col gap-1",
+                                input {
+                                    class: "bg-gray-700 rounded-lg px-4 py-2 text-white outline-none focus:ring-2 focus:ring-emerald-500 w-full",
+                                    r#type: "number",
+                                    min: "0",
+                                    placeholder: "Percent",
+                                    value: "{blind_increase_pct}",
+                                    oninput: move |e| blind_increase_pct.set(e.value()),
+                                }
+                                p { class: "text-xs text-gray-500", "Increase (%)" }
+                            }
+                        }
+                        p { class: "text-xs text-gray-500", "Leave empty or 0 to keep blinds fixed" }
+                    }
                 }
 
                 // Validation error
