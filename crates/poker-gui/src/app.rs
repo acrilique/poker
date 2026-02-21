@@ -142,7 +142,7 @@ pub fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }
-        div { class: "min-h-screen bg-gray-900 text-white font-sans",
+        div { class: "min-h-screen bg-base text-foreground font-sans",
             match &*screen.read() {
                 Screen::Connection => rsx! {
                     connection_screen::ConnectionScreen { error: conn_error }
@@ -150,7 +150,7 @@ pub fn App() -> Element {
                 Screen::Game => rsx! {
                     div { class: "flex h-screen",
                         // Left sidebar: player list
-                        div { class: "w-64 bg-gray-800 border-r border-gray-700 flex flex-col",
+                        div { class: "w-64 bg-surface border-r border-muted/50 flex flex-col",
                             player_list::PlayerList { state: game_state }
                         }
                         // Main area
@@ -162,7 +162,7 @@ pub fn App() -> Element {
                             // Action bar
                             action_bar::ActionBar { state: game_state }
                             // Event log (fixed height at bottom)
-                            div { class: "h-48 border-t border-gray-700",
+                            div { class: "h-48 border-t border-muted/50",
                                 event_log::EventLog { state: game_state }
                             }
                         }

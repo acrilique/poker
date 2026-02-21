@@ -303,7 +303,7 @@ pub fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }
-        div { class: "min-h-screen bg-gray-900 text-white font-sans",
+        div { class: "min-h-screen bg-base text-foreground font-sans",
             match &*screen.read() {
                 Screen::Connection => rsx! {
                     connection_screen::ConnectionScreen { error: conn_error, default_server: origin }
@@ -311,7 +311,7 @@ pub fn App() -> Element {
                 Screen::Game => rsx! {
                     div { class: "flex h-screen portrait-rotate",
                         // Left sidebar: player list
-                        div { class: "w-64 bg-gray-800 border-r border-gray-700 flex flex-col",
+                        div { class: "w-64 bg-surface border-r border-muted/50 flex flex-col",
                             player_list::PlayerList { state: game_state }
                         }
                         // Main area
@@ -323,7 +323,7 @@ pub fn App() -> Element {
                             // Action bar
                             action_bar::ActionBar { state: game_state }
                             // Event log: always visible on large screens, hidden overlay on small
-                            div { class: "hidden lg:block h-48 border-t border-gray-700",
+                            div { class: "hidden lg:block h-48 border-t border-muted/50",
                                 event_log::EventLog { state: game_state }
                             }
                             // Mobile log overlay (managed by the GameLogOverlay component)
@@ -354,7 +354,7 @@ fn GameLogOverlay(state: Signal<ClientGameState>) -> Element {
         if visible {
             // Overlay covering the main area
             div {
-                class: "absolute inset-0 z-40 bg-gray-900/95 overflow-y-auto",
+                class: "absolute inset-0 z-40 bg-base/95 overflow-y-auto",
                 event_log::EventLog { state }
             }
         }
@@ -362,7 +362,7 @@ fn GameLogOverlay(state: Signal<ClientGameState>) -> Element {
         // Rendered after the overlay so it paints on top
         div { class: "absolute bottom-14 right-3 z-50",
             button {
-                class: "px-3 py-1.5 bg-gray-700/80 hover:bg-gray-600 rounded-lg text-xs font-semibold text-gray-300 shadow-lg transition backdrop-blur-sm",
+                class: "px-3 py-1.5 bg-surface/80 hover:bg-muted rounded-lg text-xs font-semibold text-foreground/70 shadow-lg transition backdrop-blur-sm",
                 onclick: move |_| show_log.set(!visible),
                 if visible { "✕ Close" } else { "📋 Logs" }
             }

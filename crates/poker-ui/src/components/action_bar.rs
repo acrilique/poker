@@ -19,7 +19,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
     // Only show when it's our turn.
     if !gs.is_our_turn {
         return rsx! {
-            div { class: "h-16 bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-4 text-gray-500 text-sm",
+            div { class: "h-16 bg-surface border-t border-muted/50 flex items-center justify-center gap-4 text-foreground/50 text-sm",
                 if is_sitting_out {
                     "Sitting out…"
                 } else {
@@ -40,7 +40,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
     let call_text = format_stack(call_amount, bb, mode);
 
     rsx! {
-        div { class: "bg-gray-800 border-t border-gray-700 p-3 flex flex-col gap-2",
+        div { class: "bg-surface border-t border-muted/50 p-3 flex flex-col gap-2",
             // Raise presets (top row)
             if can_raise || can_allin {
                 div { class: "flex items-center gap-2 justify-center",
@@ -51,9 +51,9 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                             let is_allin = *preset == RaisePreset::AllIn;
 
                             let btn_class = if is_allin {
-                                "px-3 py-1 bg-red-600 hover:bg-red-500 rounded-lg text-sm font-semibold text-white transition"
+                                "px-3 py-1 bg-muted hover:bg-muted-light rounded-lg text-sm font-semibold text-foreground transition"
                             } else {
-                                "px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded-lg text-sm font-semibold text-white transition"
+                                "px-3 py-1 bg-elevated hover:bg-base rounded-lg text-sm font-semibold text-foreground transition"
                             };
 
                             rsx! {
@@ -107,7 +107,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                 // Call
                 if can_call {
                     button {
-                        class: "px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-semibold text-white transition",
+                        class: "px-4 py-2 bg-primary hover:bg-primary-light rounded-lg font-semibold text-foreground transition",
                         onclick: {
                             let gs_clone = gs.clone();
                             move |_| {
@@ -123,20 +123,20 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                 // Raise input + button
                 if can_raise || can_allin {
                     div { class: "flex items-center gap-2",
-                        div { class: "flex items-center bg-gray-700 rounded-lg focus-within:ring-2 focus-within:ring-emerald-500",
+                        div { class: "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent",
                             input {
-                                class: "bg-transparent px-3 py-2 text-white w-28 outline-none lg:w-20",
+                                class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none lg:w-20",
                                 r#type: "number",
                                 placeholder: "Amount",
                                 value: "{raise_input}",
                                 oninput: move |e| raise_input.set(e.value()),
                             }
-                            span { class: "pr-3 text-gray-400 text-sm select-none",
+                            span { class: "pr-3 text-foreground/50 text-sm select-none",
                                 if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "chips" }
                             }
                         }
                         button {
-                            class: "px-4 py-2 bg-orange-600 hover:bg-orange-500 rounded-lg font-semibold text-white transition",
+                            class: "px-4 py-2 bg-accent hover:bg-accent-light rounded-lg font-semibold text-base transition",
                             onclick: {
                                 let gs_clone = gs.clone();
                                 move |_| {
@@ -164,8 +164,8 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
 
 fn fold_check_style(is_check: bool) -> &'static str {
     if is_check {
-        "bg-green-600 hover:bg-green-500 text-white"
+        "bg-primary hover:bg-primary-light text-foreground"
     } else {
-        "bg-gray-600 hover:bg-gray-500 text-white"
+        "bg-elevated hover:bg-base text-foreground"
     }
 }

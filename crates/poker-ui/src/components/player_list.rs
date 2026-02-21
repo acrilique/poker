@@ -25,8 +25,8 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_bb = player.id == gs.big_blind_id;
                         let is_sat_out = gs.is_player_sitting_out(player.id);
                         let is_active_turn = gs.turn_timer_player == Some(player.id);
-                        let bg = if is_us { "bg-gray-700" } else { "bg-gray-800" };
-                        let border = if is_active_turn { "ring-2 ring-emerald-500" } else { "" };
+                        let bg = if is_us { "bg-muted" } else { "bg-surface" };
+                        let border = if is_active_turn { "ring-2 ring-accent" } else { "" };
 
                         // Compute effective stack (chips minus current bet) and bet amount.
                         let bet = gs.player_bets.get(&player.id).copied().unwrap_or(0).min(player.chips);
@@ -38,14 +38,14 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                             div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border}",
                                 div { class: "flex items-center gap-2",
                                     if is_sb {
-                                        span { class: "text-yellow-400 text-xs font-bold", "SB" }
+                                        span { class: "text-accent text-xs font-bold", "SB" }
                                     }
                                     if is_bb {
-                                        span { class: "text-blue-400 text-xs font-bold", "BB" }
+                                        span { class: "text-primary text-xs font-bold", "BB" }
                                     }
-                                    span { class: if is_us { "font-semibold text-emerald-300" } else { "text-white" }, "{player.name}" }
+                                    span { class: if is_us { "font-semibold text-accent" } else { "text-foreground" }, "{player.name}" }
                                     if is_sat_out {
-                                        span { class: "text-gray-500 text-xs italic", "(away)" }
+                                        span { class: "text-foreground/40 text-xs italic", "(away)" }
                                     }
                                 }
                                 div {
@@ -55,9 +55,9 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                                         let new_mode = display_mode.read().toggle();
                                         display_mode.set(new_mode);
                                     },
-                                    span { class: "text-gray-400 text-sm hover:text-gray-200", "{stack_text}" }
+                                    span { class: "text-foreground/60 text-sm hover:text-foreground", "{stack_text}" }
                                     if let Some(bt) = &bet_text {
-                                        span { class: "text-amber-400 text-sm font-medium", "+{bt}" }
+                                        span { class: "text-accent text-sm font-medium", "+{bt}" }
                                     }
                                 }
                             }
@@ -67,11 +67,11 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
             }
 
             // Bottom controls: Start / Sit Out / Exit
-            div { class: "p-3 border-t border-gray-700 flex flex-col gap-2",
+            div { class: "p-3 border-t border-muted/50 flex flex-col gap-2",
                 // Start game button (lobby only)
                 if !gs.game_started {
                     button {
-                        class: "w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg py-2 transition",
+                        class: "w-full bg-primary hover:bg-primary-light text-foreground font-semibold rounded-lg py-2 transition",
                         onclick: move |_| {
                             coroutine.send(UiMessage::Action(ClientMessage::StartGame));
                         },
@@ -84,9 +84,9 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                     {
                         let is_sitting_out = gs.is_sitting_out();
                         let (label, btn_class) = if is_sitting_out {
-                            ("Sit In", "w-full bg-emerald-600 hover:bg-emerald-500 rounded-lg py-1.5 text-sm font-semibold text-white transition")
+                            ("Sit In", "w-full bg-primary hover:bg-primary-light rounded-lg py-1.5 text-sm font-semibold text-foreground transition")
                         } else {
-                            ("Sit Out", "w-full bg-gray-600 hover:bg-gray-500 rounded-lg py-1.5 text-sm font-semibold text-white transition")
+                            ("Sit Out", "w-full bg-elevated hover:bg-base rounded-lg py-1.5 text-sm font-semibold text-foreground transition")
                         };
                         rsx! {
                             button {
@@ -106,7 +106,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
 
                 // Exit game button (always visible)
                 button {
-                    class: "w-full bg-red-700 hover:bg-red-600 rounded-lg py-1.5 text-sm font-semibold text-white transition",
+                    class: "w-full bg-muted hover:bg-muted-light rounded-lg py-1.5 text-sm font-semibold text-foreground transition",
                     onclick: move |_| {
                         coroutine.send(UiMessage::ExitGame);
                     },

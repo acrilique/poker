@@ -8,7 +8,7 @@ pub fn EventLog(state: Signal<ClientGameState>) -> Element {
     let gs = state.read();
 
     rsx! {
-        div { class: "h-full overflow-y-auto p-3 bg-gray-900 text-sm font-mono flex flex-col gap-0.5",
+        div { class: "h-full overflow-y-auto p-3 bg-base text-sm font-mono flex flex-col gap-0.5",
             for event in gs.events.iter() {
                 {render_event(event)}
             }
@@ -167,11 +167,11 @@ fn render_event(event: &GameEvent) -> Element {
 
 fn category_color(cat: LogCategory) -> &'static str {
     match cat {
-        LogCategory::System => "text-gray-400",
-        LogCategory::Chat => "text-blue-400",
-        LogCategory::Action => "text-gray-200",
-        LogCategory::Winner => "text-emerald-400",
-        LogCategory::Error => "text-red-400",
-        LogCategory::Info => "text-gray-300",
+        LogCategory::System => "text-foreground/60",
+        LogCategory::Chat => "text-primary",
+        LogCategory::Action => "text-foreground/80",
+        LogCategory::Winner => "text-accent",
+        LogCategory::Error => "text-primary",
+        LogCategory::Info => "text-foreground/70",
     }
 }
