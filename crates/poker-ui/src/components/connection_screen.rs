@@ -75,7 +75,8 @@ pub fn ConnectionScreen(
     rsx! {
         div { class: "min-h-screen flex items-center justify-center p-4",
             div { class: "bg-gray-800 w-full max-w-sm rounded-2xl shadow-2xl p-6 flex flex-col gap-4 sm:p-8 sm:gap-5 conn-card",
-                h1 { class: "text-3xl font-bold text-center text-emerald-400", "♠ Poker ♥" }
+                h1 { class: "text-3xl font-bold text-center text-emerald-400", "Texas hold 'em" }
+                p { class: "text-xs text-gray-500 text-right -mt-2", "by acrilique" }
 
                 // Form fields — single column normally, two columns in landscape
                 div { class: "flex flex-col gap-4 conn-fields",
