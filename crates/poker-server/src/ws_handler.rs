@@ -56,7 +56,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                         blind_config,
                         starting_bbs,
                         ..
-                    } => match room_manager.create_room(rid, blind_config, starting_bbs).await {
+                    } => match room_manager
+                        .create_room(rid, blind_config, starting_bbs)
+                        .await
+                    {
                         Ok(()) => {
                             let ok = ServerMessage::RoomCreated {
                                 room_id: rid.clone(),

@@ -49,13 +49,21 @@ pub fn App() -> Element {
                         starting_bbs,
                     }) = rx.next().await
                     {
-                        break (name, server_url, room_id, create, blind_config, starting_bbs);
+                        break (
+                            name,
+                            server_url,
+                            room_id,
+                            create,
+                            blind_config,
+                            starting_bbs,
+                        );
                     }
                 };
 
                 // 2. Build WS URL and attempt connection.
                 conn_error.set(String::new());
-                let ws_url = if server_url.starts_with("ws://") || server_url.starts_with("wss://") {
+                let ws_url = if server_url.starts_with("ws://") || server_url.starts_with("wss://")
+                {
                     format!("{server_url}/ws")
                 } else {
                     format!("ws://{server_url}/ws")

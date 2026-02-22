@@ -22,7 +22,9 @@ use poker_ui::{Screen, StackDisplayMode, UiMessage};
 
 const TAILWIND_CSS: Asset = asset!(
     "/assets/tailwind.css",
-    AssetOptions::css().with_preload(true).with_static_head(true)
+    AssetOptions::css()
+        .with_preload(true)
+        .with_static_head(true)
 );
 
 /// Maximum number of automatic reconnection attempts before giving up.
@@ -110,9 +112,10 @@ async fn try_rejoin(
                 }
                 // Check if the latest event is an error (session expired).
                 if let Some(ev) = ctrl.state.events.back()
-                    && matches!(ev, poker_core::game_state::GameEvent::ServerError { .. }) {
-                        return None;
-                    }
+                    && matches!(ev, poker_core::game_state::GameEvent::ServerError { .. })
+                {
+                    return None;
+                }
             }
             PollResult::Error | PollResult::Disconnected => return None,
             _ => {}
@@ -229,7 +232,14 @@ pub fn App() -> Element {
                         starting_bbs,
                     }) = rx.next().await
                     {
-                        break (name, server_url, room_id, create, blind_config, starting_bbs);
+                        break (
+                            name,
+                            server_url,
+                            room_id,
+                            create,
+                            blind_config,
+                            starting_bbs,
+                        );
                     }
                 };
 
@@ -264,13 +274,12 @@ pub fn App() -> Element {
                     match ctrl.recv().await {
                         PollResult::Updated(changed) => {
                             game_state.set(ctrl.state.clone());
-                            if (changed.phase || changed.players)
-                                && ctrl.state.our_player_id != 0 {
-                                    // Persist session for reconnection.
-                                    save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
-                                    screen.set(Screen::Game);
-                                    break true;
-                                }
+                            if (changed.phase || changed.players) && ctrl.state.our_player_id != 0 {
+                                // Persist session for reconnection.
+                                save_session(&ws_url, &room_id, &name, &ctrl.state.session_token);
+                                screen.set(Screen::Game);
+                                break true;
+                            }
                         }
                         PollResult::Unknown => {}
                         PollResult::Error | PollResult::Disconnected => {
