@@ -4,30 +4,21 @@
   "description": "Multiplayer poker web app",
   "icons": [
     {
-      "src": "16x16.png",
+      "src": "icon-192.png",
       "type": "image/png",
-      "sizes": "16x16"
+      "sizes": "192x192"
     },
     {
-      "src": "24x24.png",
+      "src": "icon-512.png",
       "type": "image/png",
-      "sizes": "24x24"
-    },
-    {
-      "src": "32x32.png",
-      "type": "image/png",
-      "sizes": "32x32"
-    },
-    {
-      "src": "64x64.png",
-      "type": "image/png",
-      "sizes": "64x64"
-    },
-    {
-      "src": "256x256.png",
-      "type": "image/png",
-      "sizes": "256x256",
+      "sizes": "512x512",
       "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
     }
   ],
   "start_url": "/poker/",
