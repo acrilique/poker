@@ -27,8 +27,21 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_folded = gs.is_player_folded(player.id);
                         let is_active_turn = gs.turn_timer_player == Some(player.id);
                         let bg = if is_us { "bg-muted" } else { "bg-surface" };
-                        let border = if is_active_turn { "ring-2 ring-accent" } else { "" };
+                        let border = if is_active_turn { "timer-border" } else { "" };
                         let opacity = if is_folded { "opacity-50" } else { "" };
+
+                        // Key includes the turn counter so the DOM node is recreated
+                        // on each new timer, restarting the CSS animation.
+                        let div_key = if is_active_turn {
+                            format!("p{}-t{}", player.id, gs.turn_counter)
+                        } else {
+                            format!("p{}", player.id)
+                        };
+                        let timer_style = if is_active_turn {
+                            format!("--timer-duration: {}s", gs.turn_timer_secs)
+                        } else {
+                            String::new()
+                        };
 
                         // Compute effective stack (chips minus current bet) and bet amount.
                         let bet = gs.player_bets.get(&player.id).copied().unwrap_or(0).min(player.chips);
@@ -37,7 +50,10 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let bet_text = if bet > 0 { Some(format_stack(bet, bb, mode)) } else { None };
 
                         rsx! {
-                            div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border} {opacity}",
+                            div {
+                                key: "{div_key}",
+                                class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border} {opacity}",
+                                style: "{timer_style}",
                                 div { class: "flex items-center gap-2",
                                     if is_sb {
                                         span { class: "text-accent text-xs font-bold", "SB" }

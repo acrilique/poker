@@ -242,6 +242,9 @@ pub struct ClientGameState {
     pub turn_timer_player: Option<u32>,
     /// Duration (in seconds) of the current turn timer.
     pub turn_timer_secs: u32,
+    /// Monotone counter incremented each time a turn timer starts.
+    /// Used by the UI to restart CSS animations.
+    pub turn_counter: u64,
     /// Set of player IDs currently sitting out.
     pub sitting_out_players: HashSet<u32>,
     /// Set of player IDs that have folded in the current hand.
@@ -286,6 +289,7 @@ impl ClientGameState {
             player_bets: HashMap::new(),
             turn_timer_player: None,
             turn_timer_secs: 0,
+            turn_counter: 0,
             sitting_out_players: HashSet::new(),
             folded_players: HashSet::new(),
             session_token: String::new(),
@@ -721,6 +725,7 @@ impl ClientGameState {
             } => {
                 self.turn_timer_player = Some(*player_id);
                 self.turn_timer_secs = *timeout_secs;
+                self.turn_counter += 1;
                 self.add_event(GameEvent::TurnTimerStarted {
                     player_id: *player_id,
                     name: self.player_name(*player_id),

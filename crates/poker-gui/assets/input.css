@@ -20,6 +20,44 @@
 .suit-red { color: #BE5B50; }
 .suit-black { color: #1A130D; }
 
+/* Timer border: clockwise-disappearing ring for the active-turn player */
+@property --timer-angle {
+    syntax: '<angle>';
+    initial-value: 360deg;
+    inherits: false;
+}
+
+.timer-border {
+    position: relative;
+}
+
+.timer-border::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: calc(0.5rem + 2px);
+    background: conic-gradient(
+        transparent calc(360deg - var(--timer-angle)),
+        var(--color-accent) calc(360deg - var(--timer-angle))
+    );
+    -webkit-mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    padding: 2px;
+    animation: timer-sweep var(--timer-duration, 30s) linear forwards;
+    pointer-events: none;
+}
+
+@keyframes timer-sweep {
+    from { --timer-angle: 360deg; }
+    to   { --timer-angle: 0deg; }
+}
+
 /* Card styling */
 .card {
     @apply inline-flex items-center justify-center rounded-lg border-2 border-accent/30 bg-foreground font-bold text-lg shadow-md whitespace-nowrap;
