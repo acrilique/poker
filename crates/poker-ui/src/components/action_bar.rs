@@ -125,7 +125,7 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                     div { class: "flex items-center gap-2",
                         div { class: "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent",
                             input {
-                                class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none lg:w-20",
+                                class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none",
                                 r#type: "number",
                                 placeholder: "Amount",
                                 value: "{raise_input}",
