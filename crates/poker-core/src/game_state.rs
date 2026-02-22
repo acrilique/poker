@@ -389,10 +389,13 @@ impl ClientGameState {
             }
             ServerMessage::PlayerJoined { player_id, name } => {
                 if !self.players.iter().any(|p| p.id == *player_id) {
+                    // Use our own starting chips as a best guess; the
+                    // server will send ChipUpdate / PlayerList with exact
+                    // values shortly after.
                     self.players.push(PlayerInfo {
                         id: *player_id,
                         name: name.clone(),
-                        chips: 1000,
+                        chips: self.our_chips,
                     });
                 }
                 self.add_event(GameEvent::PlayerJoined {

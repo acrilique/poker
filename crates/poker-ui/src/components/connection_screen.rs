@@ -21,6 +21,7 @@ pub fn ConnectionScreen(
     let mut validation_error = use_signal(String::new);
     let mut blind_interval_mins = use_signal(String::new);
     let mut blind_increase_pct = use_signal(String::new);
+    let mut starting_bbs_input = use_signal(|| "50".to_string());
     let coroutine = use_coroutine_handle::<UiMessage>();
 
     let mut on_submit = move |create: bool| {
@@ -59,6 +60,13 @@ pub fn ConnectionScreen(
             BlindConfig::default()
         };
 
+        let starting_bbs = starting_bbs_input
+            .read()
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(50)
+            .max(1);
+
         validation_error.set(String::new());
         coroutine.send(UiMessage::Connect {
             name: n,
@@ -66,6 +74,7 @@ pub fn ConnectionScreen(
             room_id: r,
             create,
             blind_config,
+            starting_bbs,
         });
     };
 
@@ -114,6 +123,21 @@ pub fn ConnectionScreen(
                             oninput: move |e| room_id.set(e.value()),
                         }
                         p { class: "text-xs text-foreground/40", "Alphanumeric, up to 19 characters" }
+                    }
+
+                    // Starting big blinds
+                    div { class: "flex flex-col gap-1",
+                        label { class: "text-sm text-foreground/60", "Starting stack (host only)" }
+                        div { class: "flex items-center gap-2",
+                            input {
+                                class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-24",
+                                r#type: "number",
+                                min: "1",
+                                value: "{starting_bbs_input}",
+                                oninput: move |e| starting_bbs_input.set(e.value()),
+                            }
+                            span { class: "text-sm text-foreground/60", "big blinds" }
+                        }
                     }
 
                     // Blind increase settings (applies when creating a room)

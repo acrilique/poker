@@ -115,6 +115,8 @@ pub struct GameState {
     pub blind_config: BlindConfig,
     /// When blinds were last increased (or when the game started).
     pub last_blind_increase: Option<Instant>,
+    /// Number of big blinds each player starts with.
+    pub starting_bbs: u32,
 }
 
 impl Default for GameState {
@@ -141,6 +143,7 @@ impl Default for GameState {
             has_acted_this_round: false,
             blind_config: BlindConfig::default(),
             last_blind_increase: None,
+            starting_bbs: 50,
         }
     }
 }
@@ -151,10 +154,11 @@ impl GameState {
     }
 
     pub fn add_player(&mut self, name: String) -> Player {
+        let starting_chips = self.starting_bbs * self.big_blind;
         let player = Player {
             id: self.next_player_id,
             name,
-            chips: 1000,
+            chips: starting_chips,
             status: PlayerStatus::Waiting,
             hole_cards: None,
             current_bet: 0,

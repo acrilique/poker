@@ -64,6 +64,8 @@ pub enum UiMessage {
         room_id: String,
         create: bool,
         blind_config: BlindConfig,
+        /// Number of big blinds each player starts with (default: 50).
+        starting_bbs: u32,
     },
     /// A game action to forward to the server.
     Action(ClientMessage),

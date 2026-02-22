@@ -33,6 +33,7 @@ pub async fn start_client(
         ctrl.send(ClientMessage::CreateRoom {
             room_id: room_id.to_string(),
             blind_config: BlindConfig::default(),
+            starting_bbs: 50,
         });
     }
     ctrl.send(ClientMessage::JoinRoom {

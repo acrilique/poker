@@ -133,6 +133,10 @@ impl BlindConfig {
     }
 }
 
+fn default_starting_bbs() -> u32 {
+    100
+}
+
 /// Messages sent from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -145,6 +149,9 @@ pub enum ClientMessage {
         room_id: String,
         #[serde(default)]
         blind_config: BlindConfig,
+        /// Number of big blinds each player starts with (default: 50).
+        #[serde(default = "default_starting_bbs")]
+        starting_bbs: u32,
     },
 
     /// Join an existing room with the given ID and player name.

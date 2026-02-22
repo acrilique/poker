@@ -39,16 +39,17 @@ pub fn App() -> Element {
                 game_state.set(ClientGameState::new(""));
 
                 // 1. Wait for a Connect message from the connection screen.
-                let (name, server_url, room_id, create, blind_config) = loop {
+                let (name, server_url, room_id, create, blind_config, starting_bbs) = loop {
                     if let Some(UiMessage::Connect {
                         name,
                         server_url,
                         room_id,
                         create,
                         blind_config,
+                        starting_bbs,
                     }) = rx.next().await
                     {
-                        break (name, server_url, room_id, create, blind_config);
+                        break (name, server_url, room_id, create, blind_config, starting_bbs);
                     }
                 };
 
@@ -74,6 +75,7 @@ pub fn App() -> Element {
                     ctrl.send(ClientMessage::CreateRoom {
                         room_id: room_id.clone(),
                         blind_config,
+                        starting_bbs,
                     });
                 }
                 ctrl.send(ClientMessage::JoinRoom {

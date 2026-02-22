@@ -43,9 +43,10 @@ pub struct Room {
 }
 
 impl Room {
-    fn new(blind_config: BlindConfig) -> Self {
+    fn new(blind_config: BlindConfig, starting_bbs: u32) -> Self {
         let mut gs = GameState::new();
         gs.blind_config = blind_config;
+        gs.starting_bbs = starting_bbs;
         Self {
             game_state: Arc::new(Mutex::new(gs)),
             player_senders: HashMap::new(),
@@ -190,6 +191,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         blind_config: BlindConfig,
+        starting_bbs: u32,
     ) -> Result<(), String> {
         validate_room_id(room_id)?;
 
@@ -199,7 +201,7 @@ impl RoomManager {
         }
         rooms.insert(
             room_id.to_string(),
-            Arc::new(Mutex::new(Room::new(blind_config))),
+            Arc::new(Mutex::new(Room::new(blind_config, starting_bbs))),
         );
         Ok(())
     }

@@ -54,8 +54,9 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                     ClientMessage::CreateRoom {
                         room_id: ref rid,
                         blind_config,
+                        starting_bbs,
                         ..
-                    } => match room_manager.create_room(rid, blind_config).await {
+                    } => match room_manager.create_room(rid, blind_config, starting_bbs).await {
                         Ok(()) => {
                             let ok = ServerMessage::RoomCreated {
                                 room_id: rid.clone(),
@@ -72,9 +73,14 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                     } => match room_manager.join_room(rid, name).await {
                         Ok((pid, session_token, player_count, rx, rarc)) => {
                             // Send join confirmation to this player.
+                            let chips = {
+                                let room = rarc.lock().await;
+                                let gs = room.game_state.lock().await;
+                                gs.players.get(&pid).map(|p| p.chips).unwrap_or(0)
+                            };
                             let joined = ServerMessage::JoinedGame {
                                 player_id: pid,
-                                chips: 1000,
+                                chips,
                                 player_count,
                                 session_token,
                             };
