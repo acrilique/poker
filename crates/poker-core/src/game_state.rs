@@ -244,6 +244,8 @@ pub struct ClientGameState {
     pub turn_timer_secs: u32,
     /// Set of player IDs currently sitting out.
     pub sitting_out_players: HashSet<u32>,
+    /// Set of player IDs that have folded in the current hand.
+    pub folded_players: HashSet<u32>,
     /// Session token for reconnection after a disconnect.
     pub session_token: String,
     /// Revealed hands during showdown (cleared on NewHand).
@@ -285,6 +287,7 @@ impl ClientGameState {
             turn_timer_player: None,
             turn_timer_secs: 0,
             sitting_out_players: HashSet::new(),
+            folded_players: HashSet::new(),
             session_token: String::new(),
             showdown_hands: Vec::new(),
         }
@@ -316,6 +319,11 @@ impl ClientGameState {
     /// Returns true if the given player is sitting out.
     pub fn is_player_sitting_out(&self, player_id: u32) -> bool {
         self.sitting_out_players.contains(&player_id)
+    }
+
+    /// Whether a player has folded in the current hand.
+    pub fn is_player_folded(&self, player_id: u32) -> bool {
+        self.folded_players.contains(&player_id)
     }
 
     /// Look up a player's display name by ID, falling back to `"Player #N"`.
@@ -452,6 +460,7 @@ impl ClientGameState {
                 self.hole_cards = None;
                 self.community_cards.clear();
                 self.showdown_hands.clear();
+                self.folded_players.clear();
                 self.pot = small_blind + big_blind;
                 self.stage = "Preflop".to_string();
                 self.is_our_turn = false;
@@ -512,6 +521,10 @@ impl ClientGameState {
             } => {
                 if *player_id == self.our_player_id {
                     self.is_our_turn = false;
+                }
+                // Track folded players.
+                if *action == PlayerAction::Fold {
+                    self.folded_players.insert(*player_id);
                 }
                 // Track the chips this player put in during this action.
                 if let Some(a) = amount {
@@ -650,6 +663,7 @@ impl ClientGameState {
                 hole_cards,
                 players,
                 sitting_out,
+                folded,
                 blind_config,
                 dealer_id,
                 small_blind_id,
@@ -669,6 +683,7 @@ impl ClientGameState {
                 self.hole_cards = *hole_cards;
                 self.players = players.clone();
                 self.sitting_out_players = sitting_out.iter().copied().collect();
+                self.folded_players = folded.iter().copied().collect();
                 self.blind_config = *blind_config;
                 self.big_blind = *big_blind;
                 self.dealer_id = *dealer_id;

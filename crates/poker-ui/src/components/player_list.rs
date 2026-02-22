@@ -24,9 +24,11 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let is_sb = player.id == gs.small_blind_id;
                         let is_bb = player.id == gs.big_blind_id;
                         let is_sat_out = gs.is_player_sitting_out(player.id);
+                        let is_folded = gs.is_player_folded(player.id);
                         let is_active_turn = gs.turn_timer_player == Some(player.id);
                         let bg = if is_us { "bg-muted" } else { "bg-surface" };
                         let border = if is_active_turn { "ring-2 ring-accent" } else { "" };
+                        let opacity = if is_folded { "opacity-50" } else { "" };
 
                         // Compute effective stack (chips minus current bet) and bet amount.
                         let bet = gs.player_bets.get(&player.id).copied().unwrap_or(0).min(player.chips);
@@ -35,7 +37,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                         let bet_text = if bet > 0 { Some(format_stack(bet, bb, mode)) } else { None };
 
                         rsx! {
-                            div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border}",
+                            div { class: "flex items-center justify-between px-3 py-2 rounded-lg mb-1 {bg} {border} {opacity}",
                                 div { class: "flex items-center gap-2",
                                     if is_sb {
                                         span { class: "text-accent text-xs font-bold", "SB" }
@@ -46,6 +48,9 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                                     span { class: if is_us { "font-semibold text-accent" } else { "text-foreground" }, "{player.name}" }
                                     if is_sat_out {
                                         span { class: "text-foreground/40 text-xs italic", "(away)" }
+                                    }
+                                    if is_folded {
+                                        span { class: "text-foreground/40 text-xs italic", "(folded)" }
                                     }
                                 }
                                 div {

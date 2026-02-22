@@ -331,6 +331,8 @@ pub enum ServerMessage {
         players: Vec<PlayerInfo>,
         sitting_out: Vec<u32>,
         #[serde(default)]
+        folded: Vec<u32>,
+        #[serde(default)]
         blind_config: BlindConfig,
         dealer_id: u32,
         small_blind_id: u32,

@@ -114,6 +114,13 @@ impl Room {
             .map(|p| p.id)
             .collect();
 
+        let folded: Vec<u32> = gs
+            .players
+            .values()
+            .filter(|p| p.status == poker_core::game_logic::PlayerStatus::Folded)
+            .map(|p| p.id)
+            .collect();
+
         let community_cards: Vec<CardInfo> = gs.community_cards.iter().map(card_to_info).collect();
 
         let hole_cards = gs
@@ -158,6 +165,7 @@ impl Room {
             hole_cards,
             players,
             sitting_out,
+            folded,
             blind_config: self.blind_config,
             dealer_id,
             small_blind_id: sb_id,
