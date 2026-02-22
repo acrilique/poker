@@ -303,6 +303,16 @@ pub fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: TAILWIND_CSS }
+        document::Link { rel: "manifest", href: "/poker/manifest.json" }
+        document::Meta { name: "theme-color", content: "#1A130D" }
+        document::Link { rel: "icon", href: "/poker/favicon.ico" }
+        document::Script {
+            r#"
+            if ("serviceWorker" in navigator) {{
+                navigator.serviceWorker.register("/poker/sw.js", {{ scope: "/poker/" }});
+            }}
+            "#
+        }
         div { class: "min-h-screen bg-base text-foreground font-sans",
             match &*screen.read() {
                 Screen::Connection => rsx! {
