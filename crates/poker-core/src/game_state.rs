@@ -5,6 +5,18 @@ use crate::protocol::{
     BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage,
 };
 
+/// A revealed hand during showdown, for direct UI display.
+#[derive(Debug, Clone)]
+pub struct ShowdownHand {
+    pub player_id: u32,
+    pub name: String,
+    pub cards: [CardInfo; 2],
+    /// Hand rank description (e.g. "Full House"). Present on river showdown.
+    pub hand_rank: Option<String>,
+    /// Win+tie equity percentage (0–100). Present on all-in showdown.
+    pub equity: Option<f64>,
+}
+
 /// Semantic category for log/event messages. The UI layer decides how to style each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogCategory {
@@ -234,6 +246,8 @@ pub struct ClientGameState {
     pub sitting_out_players: HashSet<u32>,
     /// Session token for reconnection after a disconnect.
     pub session_token: String,
+    /// Revealed hands during showdown (cleared on NewHand).
+    pub showdown_hands: Vec<ShowdownHand>,
 }
 
 impl ClientGameState {
@@ -272,6 +286,7 @@ impl ClientGameState {
             turn_timer_secs: 0,
             sitting_out_players: HashSet::new(),
             session_token: String::new(),
+            showdown_hands: Vec::new(),
         }
     }
 
@@ -433,6 +448,7 @@ impl ClientGameState {
                 self.big_blind = *big_blind;
                 self.hole_cards = None;
                 self.community_cards.clear();
+                self.showdown_hands.clear();
                 self.pot = small_blind + big_blind;
                 self.stage = "Preflop".to_string();
                 self.is_our_turn = false;
@@ -522,23 +538,44 @@ impl ClientGameState {
                 changed.players = true;
             }
             ServerMessage::Showdown { hands } => {
-                let hands_with_names = hands
+                let hands_with_names: Vec<_> = hands
                     .iter()
                     .map(|(id, cards, rank)| (*id, self.player_name(*id), *cards, rank.clone()))
+                    .collect();
+                self.showdown_hands = hands_with_names
+                    .iter()
+                    .map(|(id, name, cards, rank)| ShowdownHand {
+                        player_id: *id,
+                        name: name.clone(),
+                        cards: *cards,
+                        hand_rank: Some(rank.clone()),
+                        equity: None,
+                    })
                     .collect();
                 self.add_event(GameEvent::Showdown {
                     hands: hands_with_names,
                 });
                 changed.phase = true;
+                changed.cards = true;
             }
             ServerMessage::AllInShowdown {
                 hands,
                 community_cards,
             } => {
                 self.community_cards = community_cards.clone();
-                let hands_with_names = hands
+                let hands_with_names: Vec<_> = hands
                     .iter()
                     .map(|(id, cards, eq)| (*id, self.player_name(*id), *cards, *eq))
+                    .collect();
+                self.showdown_hands = hands_with_names
+                    .iter()
+                    .map(|(id, name, cards, eq)| ShowdownHand {
+                        player_id: *id,
+                        name: name.clone(),
+                        cards: *cards,
+                        hand_rank: None,
+                        equity: Some(*eq),
+                    })
                     .collect();
                 self.add_event(GameEvent::AllInShowdown {
                     hands: hands_with_names,
@@ -637,6 +674,7 @@ impl ClientGameState {
                 self.connected = true;
                 self.is_our_turn = false;
                 self.valid_actions.clear();
+                self.showdown_hands.clear();
                 self.add_message("Reconnected to game.".to_string(), LogCategory::System);
                 changed.players = true;
                 changed.cards = true;

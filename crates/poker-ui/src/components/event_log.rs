@@ -98,7 +98,7 @@ fn render_event(event: &GameEvent) -> Element {
             let lines: Vec<String> = hands
                 .iter()
                 .map(|(_id, name, cards, eq)| {
-                    format!("  {name}: {} {} — {:.1}%", cards[0], cards[1], eq * 100.0)
+                    format!("  {name}: {} {} — {:.1}%", cards[0], cards[1], eq)
                 })
                 .collect();
             (
