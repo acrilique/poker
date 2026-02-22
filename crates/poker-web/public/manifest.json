@@ -24,11 +24,11 @@
   "start_url": "/poker/",
   "id": "/poker/",
   "scope": "/poker/",
-  "display": "standalone",
-  "display_override": ["window-control-overlay", "standalone"],
-  "theme_color": "#1A130D",
+  "display": "fullscreen",
+  "display_override": ["window-control-overlay"],
+  "theme_color": "#641B2E",
   "background_color": "#1A130D",
   "dir": "ltr",
   "lang": "en",
-  "orientation": "portrait"
+  "orientation": "any"
 }
