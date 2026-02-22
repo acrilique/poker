@@ -129,13 +129,6 @@ fn render_event(event: &GameEvent) -> Element {
             "Disconnected from server".to_string(),
             category_color(LogCategory::Error),
         ),
-        GameEvent::ConnectionError { message } => (
-            format!("Connection error: {message}"),
-            category_color(LogCategory::Error),
-        ),
-        GameEvent::Unknown { raw } => {
-            (format!("Unknown: {raw}"), category_color(LogCategory::Info))
-        }
         GameEvent::Text { text, category } => (text.clone(), category_color(*category)),
         GameEvent::BlindsIncreased {
             small_blind,

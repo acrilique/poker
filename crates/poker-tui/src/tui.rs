@@ -762,8 +762,6 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::Pong => "🏓 Pong!".to_string(),
         GameEvent::ServerError { message } => format!("❌ {}", message),
         GameEvent::Disconnected => "❌ Server disconnected".to_string(),
-        GameEvent::ConnectionError { message } => format!("❌ Connection error: {}", message),
-        GameEvent::Unknown { raw } => format!("📨 {}", raw),
         GameEvent::Text { text, .. } => text.clone(),
         GameEvent::BlindsIncreased {
             small_blind,

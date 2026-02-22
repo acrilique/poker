@@ -101,8 +101,7 @@ pub fn App() -> Element {
                                 break true;
                             }
                         }
-                        PollResult::Unknown => {}
-                        PollResult::Error | PollResult::Disconnected => {
+                        PollResult::Disconnected => {
                             conn_error.set("Disconnected before joining room".to_string());
                             break false;
                         }
@@ -122,8 +121,7 @@ pub fn App() -> Element {
                                 PollResult::Updated(_changed) => {
                                     game_state.set(ctrl.state.clone());
                                 }
-                                PollResult::Unknown => {}
-                                PollResult::Error | PollResult::Disconnected => {
+                                PollResult::Disconnected => {
                                     game_state.set(ctrl.state.clone());
                                     break;
                                 }

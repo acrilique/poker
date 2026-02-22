@@ -117,7 +117,7 @@ async fn try_rejoin(
                     return None;
                 }
             }
-            PollResult::Error | PollResult::Disconnected => return None,
+            PollResult::Disconnected => return None,
             _ => {}
         }
     }
@@ -144,8 +144,7 @@ async fn game_loop(
                     PollResult::Updated(_changed) => {
                         game_state.set(ctrl.state.clone());
                     }
-                    PollResult::Unknown => {}
-                    PollResult::Error | PollResult::Disconnected => {
+                    PollResult::Disconnected => {
                         game_state.set(ctrl.state.clone());
                         return GameLoopExit::Disconnected;
                     }
@@ -281,8 +280,7 @@ pub fn App() -> Element {
                                 break true;
                             }
                         }
-                        PollResult::Unknown => {}
-                        PollResult::Error | PollResult::Disconnected => {
+                        PollResult::Disconnected => {
                             conn_error.set("Disconnected before joining room".to_string());
                             break false;
                         }

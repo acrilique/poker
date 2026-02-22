@@ -11,9 +11,6 @@ default = ["native"]
 native = ["dep:tokio-tungstenite", "dep:futures-util", "tokio/io-util", "tokio/net", "tokio/rt", "tokio/time"]
 # WASM WebSocket support via gloo-net.
 web = ["dep:gloo-net", "dep:wasm-bindgen-futures", "dep:futures-util", "dep:getrandom"]
-# Legacy TCP server + broadcast-based PRIVATE message routing.
-# Only needed if you want to run the old in-process TCP server.
-legacy-server = ["native"]
 
 [dependencies]
 rand = "0.10"

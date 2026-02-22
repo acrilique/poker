@@ -6,8 +6,5 @@ pub mod poker;
 pub mod protocol;
 pub mod transport;
 
-#[cfg(feature = "legacy-server")]
-pub mod server;
-
 #[cfg(feature = "native")]
 pub mod ws_transport;

@@ -55,8 +55,7 @@ pub async fn start_client(
                     return Err(message.clone().into());
                 }
             }
-            PollResult::Unknown => {}
-            PollResult::Error | PollResult::Disconnected => {
+            PollResult::Disconnected => {
                 return Err("Disconnected before joining room".into());
             }
             PollResult::Empty => {}
@@ -91,8 +90,7 @@ async fn run_event_loop(
                             tui.on_actions_changed(&ctrl.state);
                         }
                     }
-                    PollResult::Unknown => {}
-                    PollResult::Error | PollResult::Disconnected => {
+                    PollResult::Disconnected => {
                         tui.render(&ctrl.state)?;
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                         break;

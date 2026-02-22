@@ -99,10 +99,6 @@ pub enum GameEvent {
     ServerError { message: String },
     /// Server disconnected.
     Disconnected,
-    /// Connection error.
-    ConnectionError { message: String },
-    /// An unrecognised message from the server.
-    Unknown { raw: String },
     /// Generic text message (used by the UI layer for local feedback).
     Text { text: String, category: LogCategory },
     /// Blinds increased at the start of a new level.
@@ -137,7 +133,7 @@ impl GameEvent {
             | Self::RoundWinner { .. }
             | Self::GameOver { .. } => LogCategory::Winner,
 
-            Self::ServerError { .. } | Self::Disconnected | Self::ConnectionError { .. } => {
+            Self::ServerError { .. } | Self::Disconnected => {
                 LogCategory::Error
             }
 
@@ -146,8 +142,7 @@ impl GameEvent {
             | Self::HoleCards { .. }
             | Self::CommunityCards { .. }
             | Self::PlayerEliminated { .. }
-            | Self::Pong
-            | Self::Unknown { .. } => LogCategory::Info,
+            | Self::Pong => LogCategory::Info,
 
             Self::Text { category, .. } => *category,
             Self::BlindsIncreased { .. } => LogCategory::System,
