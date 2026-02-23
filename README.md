@@ -1,6 +1,6 @@
 # Poker — Multiplayer Texas Hold'em
 
-A multiplayer Texas Hold'em poker app with three frontends (web, desktop, TUI) connecting to a shared WebSocket server.
+A multiplayer Texas Hold'em poker app with two frontends (web, TUI) connecting to a shared WebSocket server.
 
 ## Architecture
 
@@ -9,9 +9,8 @@ A multiplayer Texas Hold'em poker app with three frontends (web, desktop, TUI) c
 | `poker-core` | Core game logic, protocol, transport abstraction, game state |
 | `poker-server` | Multi-room Axum server with WebSocket support |
 | `poker-web` | Dioxus web frontend (WASM) |
-| `poker-gui` | Dioxus desktop frontend (native window) |
 | `poker-tui` | Ratatui terminal frontend |
-| `poker-ui` | Shared Dioxus UI components (used by web + desktop) |
+| `poker-ui` | Shared Dioxus UI components (used by web frontend) |
 
 ## Quick Start
 
@@ -43,16 +42,7 @@ The server listens on `0.0.0.0:8080` by default. Configure with:
 
 Open `http://localhost:8080` in a browser to play.
 
-### 3. Desktop app (optional)
-
-```bash
-cargo build -p poker-gui --release
-./target/release/poker-gui
-```
-
-Connects to the same server as the web app — enter the server address, room ID, and your name.
-
-### 4. TUI client (optional)
+### 3. TUI client
 
 ```bash
 cargo build -p poker-tui --release
@@ -75,9 +65,6 @@ cargo test
 
 # Run the server in dev mode:
 cargo run -p poker-server
-
-# Run the desktop app in dev mode:
-cd crates/poker-gui && dx serve
 
 # Build the web frontend in dev mode:
 cd crates/poker-web && dx serve

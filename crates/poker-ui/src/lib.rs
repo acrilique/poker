@@ -2,7 +2,7 @@
 //!
 //! This crate is platform-agnostic — it provides reusable components,
 //! the shared `UiMessage` type, and the `Screen` enum used by both the
-//! desktop (`poker-gui`) and web (`poker-web`) frontends.
+//! web (`poker-web`) frontend.
 
 pub mod components;
 

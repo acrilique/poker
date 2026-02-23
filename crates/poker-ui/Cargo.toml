@@ -2,7 +2,7 @@
 name = "poker-ui"
 version = "0.1.0"
 edition = "2024"
-description = "Shared Dioxus UI components for the poker app (desktop + web)"
+description = "Shared Dioxus UI components for the poker app"
 license = "MIT"
 
 [dependencies]
