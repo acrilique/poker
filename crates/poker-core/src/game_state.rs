@@ -133,9 +133,7 @@ impl GameEvent {
             | Self::RoundWinner { .. }
             | Self::GameOver { .. } => LogCategory::Winner,
 
-            Self::ServerError { .. } | Self::Disconnected => {
-                LogCategory::Error
-            }
+            Self::ServerError { .. } | Self::Disconnected => LogCategory::Error,
 
             Self::PlayerJoined { .. }
             | Self::PlayerLeft { .. }

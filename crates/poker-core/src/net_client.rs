@@ -129,10 +129,10 @@ impl NetClient {
             while let Some(frame) = stream.next().await {
                 match frame {
                     Ok(Message::Text(text)) => {
-                        if let Some(msg) = parse_server_line(&text) {
-                            if msg_tx.send(msg).is_err() {
-                                break;
-                            }
+                        if let Some(msg) = parse_server_line(&text)
+                            && msg_tx.send(msg).is_err()
+                        {
+                            break;
                         }
                     }
                     Ok(Message::Bytes(_)) => {} // skip binary frames
@@ -174,9 +174,10 @@ impl NetClient {
         tokio::spawn(async move {
             while let Ok(Some(line)) = reader.recv().await {
                 if let Some(msg) = parse_server_line(&line)
-                    && msg_tx.send(msg).is_err() {
-                        break;
-                    }
+                    && msg_tx.send(msg).is_err()
+                {
+                    break;
+                }
             }
             // Connection closed or error — channel drops, signalling disconnect.
         });

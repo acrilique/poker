@@ -67,8 +67,6 @@ impl ClientController {
         Ok(Self { net, state })
     }
 
-
-
     /// Try to receive and process one network event (non-blocking).
     ///
     /// Returns a [`PollResult`] describing what happened. Frontends should
