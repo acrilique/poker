@@ -133,7 +133,7 @@ pub fn ConnectionScreen(
                         input {
                             class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent",
                             r#type: "text",
-                            placeholder: "e.g. myroom42",
+                            placeholder: "room42",
                             value: "{room_id}",
                             oninput: move |e| room_id.set(e.value()),
                         }
