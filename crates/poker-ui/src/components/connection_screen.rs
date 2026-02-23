@@ -5,6 +5,16 @@ use poker_core::protocol::{BlindConfig, validate_room_id};
 
 use crate::UiMessage;
 
+/// Maximum allowed length for a player name.
+const MAX_NAME_LEN: usize = 16;
+
+/// Which submit action is currently in-flight, if any.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectingAction {
+    Create,
+    Join,
+}
+
 /// Props for the connection screen.
 ///
 /// `default_server` pre-fills the server address field. For web builds this
@@ -16,7 +26,7 @@ pub fn ConnectionScreen(
     #[props(default = "localhost:8080".to_string())] default_server: String,
 ) -> Element {
     let mut name = use_signal(String::new);
-    let mut server_url = use_signal(move || default_server.clone());
+    let mut server_url = use_signal(|| default_server.clone());
     let mut room_id = use_signal(String::new);
     let mut validation_error = use_signal(String::new);
     let mut blind_interval_mins = use_signal(String::new);
@@ -24,31 +34,37 @@ pub fn ConnectionScreen(
     let mut starting_bbs_input = use_signal(|| "100".to_string());
     let mut show_server = use_signal(|| false);
     let mut show_host_settings = use_signal(|| false);
-    let mut connecting = use_signal(|| false);
+    let mut connecting: Signal<Option<ConnectingAction>> = use_signal(|| None);
     let coroutine = use_coroutine_handle::<UiMessage>();
 
     // Reset connecting state when a server error arrives.
     use_effect(move || {
         if !error.read().is_empty() {
-            connecting.set(false);
+            connecting.set(None);
         }
     });
 
     let mut on_submit = move |create: bool| {
-        if *connecting.read() {
+        if connecting.read().is_some() {
             return;
         }
 
-        let n = name.read().clone();
-        let s = server_url.read().clone();
+        let n = name.read().trim().to_string();
+        let s = server_url.read().trim().to_string();
         let r = room_id.read().clone();
 
         // Client-side validation
-        if n.trim().is_empty() {
+        if n.is_empty() {
             validation_error.set("Player name cannot be empty".to_string());
             return;
         }
-        if s.trim().is_empty() {
+        if n.len() > MAX_NAME_LEN {
+            validation_error.set(format!(
+                "Player name must be at most {MAX_NAME_LEN} characters"
+            ));
+            return;
+        }
+        if s.is_empty() {
             validation_error.set("Server address cannot be empty".to_string());
             return;
         }
@@ -59,13 +75,33 @@ pub fn ConnectionScreen(
 
         // Parse blind increase settings (only relevant when creating).
         let blind_config = if create {
-            let interval_secs = blind_interval_mins
-                .read()
-                .trim()
-                .parse::<u64>()
-                .unwrap_or(0)
-                * 60;
-            let increase_percent = blind_increase_pct.read().trim().parse::<u32>().unwrap_or(0);
+            let interval_raw = blind_interval_mins.read().trim().to_string();
+            let increase_raw = blind_increase_pct.read().trim().to_string();
+
+            let interval_secs = if interval_raw.is_empty() {
+                0u64
+            } else {
+                match interval_raw.parse::<u64>() {
+                    Ok(v) => v * 60,
+                    Err(_) => {
+                        validation_error.set("Blind interval must be a valid number".to_string());
+                        return;
+                    }
+                }
+            };
+
+            let increase_percent = if increase_raw.is_empty() {
+                0u32
+            } else {
+                match increase_raw.parse::<u32>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        validation_error.set("Blind rise must be a valid number".to_string());
+                        return;
+                    }
+                }
+            };
+
             BlindConfig {
                 interval_secs,
                 increase_percent,
@@ -74,15 +110,27 @@ pub fn ConnectionScreen(
             BlindConfig::default()
         };
 
-        let starting_bbs = starting_bbs_input
-            .read()
-            .trim()
-            .parse::<u32>()
-            .unwrap_or(100)
-            .max(1);
+        let starting_bbs = {
+            let raw = starting_bbs_input.read().trim().to_string();
+            if raw.is_empty() {
+                100u32
+            } else {
+                match raw.parse::<u32>() {
+                    Ok(v) => v.max(1),
+                    Err(_) => {
+                        validation_error.set("Initial stack must be a valid number".to_string());
+                        return;
+                    }
+                }
+            }
+        };
 
         validation_error.set(String::new());
-        connecting.set(true);
+        connecting.set(Some(if create {
+            ConnectingAction::Create
+        } else {
+            ConnectingAction::Join
+        }));
         coroutine.send(UiMessage::Connect {
             name: n,
             server_url: s,
@@ -95,15 +143,16 @@ pub fn ConnectionScreen(
 
     let err = error.read().clone();
     let val_err = validation_error.read().clone();
-    let is_connecting = *connecting.read();
+    let connecting_action = *connecting.read();
+    let is_connecting = connecting_action.is_some();
 
     rsx! {
         div {
             class: "min-h-screen flex items-center justify-center p-4 bg-base",
-            // Enter key in any input → Join Room
+            // Enter key → Create if host settings are open, otherwise Join
             onkeydown: move |e| {
                 if e.key() == Key::Enter {
-                    on_submit(false);
+                    on_submit(*show_host_settings.read());
                 }
             },
             div { class: "bg-surface w-full max-w-sm rounded-2xl shadow-2xl p-6 flex flex-col gap-4 sm:p-8 sm:gap-5 conn-card",
@@ -121,6 +170,7 @@ pub fn ConnectionScreen(
                         input {
                             class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent",
                             r#type: "text",
+                            maxlength: "{MAX_NAME_LEN}",
                             placeholder: "Enter your name",
                             value: "{name}",
                             oninput: move |e| name.set(e.value()),
@@ -156,9 +206,14 @@ pub fn ConnectionScreen(
                                 "▾"
                             }
                         }
-                        if *show_server.read() {
+                        div {
+                            class: if *show_server.read() {
+                                "collapsible collapsible-open"
+                            } else {
+                                "collapsible"
+                            },
                             input {
-                                class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent",
+                                class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
                                 r#type: "text",
                                 value: "{server_url}",
                                 oninput: move |e| server_url.set(e.value()),
@@ -182,7 +237,12 @@ pub fn ConnectionScreen(
                                 "▾"
                             }
                         }
-                        if *show_host_settings.read() {
+                        div {
+                            class: if *show_host_settings.read() {
+                                "collapsible collapsible-open"
+                            } else {
+                                "collapsible"
+                            },
                             div { class: "flex flex-col gap-2 host-inputs",
                                 // Starting big blinds
                                 div { class: "flex-1 flex flex-col gap-1",
@@ -249,7 +309,7 @@ pub fn ConnectionScreen(
                         },
                         disabled: is_connecting,
                         onclick: move |_| on_submit(true),
-                        if is_connecting { "Connecting…" } else { "Create Room" }
+                        if connecting_action == Some(ConnectingAction::Create) { "Connecting…" } else { "Create Room" }
                     }
                     button {
                         class: if is_connecting {
@@ -259,7 +319,7 @@ pub fn ConnectionScreen(
                         },
                         disabled: is_connecting,
                         onclick: move |_| on_submit(false),
-                        if is_connecting { "Connecting…" } else { "Join Room" }
+                        if connecting_action == Some(ConnectingAction::Join) { "Connecting…" } else { "Join Room" }
                     }
                 }
             }

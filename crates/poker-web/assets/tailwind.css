@@ -763,6 +763,17 @@
     }
   }
 }
+.collapsible {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms ease;
+}
+.collapsible > * {
+  overflow: hidden;
+}
+.collapsible-open {
+  grid-template-rows: 1fr;
+}
 .conn-header {
   display: flex;
   flex-direction: column;
