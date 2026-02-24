@@ -684,9 +684,9 @@ async fn process_action(
 async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
     if gs.game_started && gs.player_order.len() >= 2 {
         // Drop locks before sleeping would be ideal, but we hold mutable
-        // borrows here. Since the delay is short (2 s) and actions are
-        // serialised through the room lock anyway, this is acceptable.
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        // borrows here. Since actions are serialised through the room
+        // lock anyway, this should be acceptable.
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         let hand_msgs = gs.start_new_hand();
         for m in &hand_msgs {
             room.broadcast(m);
@@ -712,7 +712,7 @@ fn send_hole_cards(gs: &GameState, room: &Room) {
 /// cards without holding the room lock.
 async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
         let room = room_arc.lock().await;
         let mut gs = room.game_state.lock().await;
