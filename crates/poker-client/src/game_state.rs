@@ -246,6 +246,10 @@ pub struct ClientGameState {
     pub session_token: String,
     /// Revealed hands during showdown (cleared on NewHand).
     pub showdown_hands: Vec<ShowdownHand>,
+    /// Whether this player is the room host.
+    pub is_host: bool,
+    /// Whether late entry is currently allowed.
+    pub allow_late_entry: bool,
 }
 
 impl ClientGameState {
@@ -287,6 +291,8 @@ impl ClientGameState {
             folded_players: HashSet::new(),
             session_token: String::new(),
             showdown_hands: Vec::new(),
+            is_host: false,
+            allow_late_entry: false,
         }
     }
 
@@ -372,9 +378,13 @@ impl ClientGameState {
                 chips,
                 player_count,
                 session_token,
+                is_host,
+                allow_late_entry,
             } => {
                 self.our_player_id = *player_id;
                 self.our_chips = *chips;
+                self.is_host = *is_host;
+                self.allow_late_entry = *allow_late_entry;
                 if !session_token.is_empty() {
                     self.session_token = session_token.clone();
                 }
@@ -662,6 +672,8 @@ impl ClientGameState {
                 sitting_out,
                 folded,
                 blind_config,
+                allow_late_entry,
+                is_host,
                 dealer_id,
                 small_blind_id,
                 big_blind_id,
@@ -682,6 +694,8 @@ impl ClientGameState {
                 self.sitting_out_players = sitting_out.iter().copied().collect();
                 self.folded_players = folded.iter().copied().collect();
                 self.blind_config = *blind_config;
+                self.allow_late_entry = *allow_late_entry;
+                self.is_host = *is_host;
                 self.big_blind = *big_blind;
                 self.dealer_id = *dealer_id;
                 self.small_blind_id = *small_blind_id;
@@ -741,6 +755,10 @@ impl ClientGameState {
                     name: self.player_name(*player_id),
                 });
                 changed.players = true;
+            }
+            ServerMessage::LateEntryChanged { allowed } => {
+                self.allow_late_entry = *allowed;
+                changed.phase = true;
             }
         }
 

@@ -100,6 +100,12 @@ pub struct GameState {
     pub last_blind_increase: Option<Instant>,
     /// Number of big blinds each player starts with.
     pub starting_bbs: u32,
+    /// Whether late entry is allowed (toggled by host).
+    pub allow_late_entry: bool,
+    /// Player ID of the room host (first player to join).
+    pub host_id: u32,
+    /// Starting chip count, frozen at game start for late entries.
+    pub starting_chips: u32,
 }
 
 impl Default for GameState {
@@ -127,6 +133,9 @@ impl Default for GameState {
             blind_config: BlindConfig::default(),
             last_blind_increase: None,
             starting_bbs: 50,
+            allow_late_entry: false,
+            host_id: 0,
+            starting_chips: 0,
         }
     }
 }
@@ -137,7 +146,12 @@ impl GameState {
     }
 
     pub fn add_player(&mut self, name: String) -> Player {
-        let starting_chips = self.starting_bbs * self.big_blind;
+        self.add_player_with_chips(name, None)
+    }
+
+    /// Add a player with an optional chip override (used for late entries).
+    pub fn add_player_with_chips(&mut self, name: String, chips_override: Option<u32>) -> Player {
+        let starting_chips = chips_override.unwrap_or(self.starting_bbs * self.big_blind);
         let player = Player {
             id: self.next_player_id,
             name,

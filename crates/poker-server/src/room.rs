@@ -169,6 +169,8 @@ impl Room {
             sitting_out,
             folded,
             blind_config: self.blind_config,
+            allow_late_entry: gs.allow_late_entry,
+            is_host: gs.host_id == player_id,
             dealer_id,
             small_blind_id: sb_id,
             big_blind_id: bb_id,
@@ -242,10 +244,23 @@ impl RoomManager {
         // mutating player_senders to avoid overlapping borrows.
         let (player_id, player_count) = {
             let mut game_state = room.game_state.lock().await;
-            if game_state.game_started {
+            if game_state.game_started && !game_state.allow_late_entry {
                 return Err("Game already in progress".to_string());
             }
-            let player = game_state.add_player(player_name.to_string());
+            let player = if game_state.game_started {
+                // Late entry: give the frozen starting chip amount.
+                let chips = game_state.starting_chips;
+                let p = game_state.add_player_with_chips(player_name.to_string(), Some(chips));
+                // Late-joiners sit out until the next hand.
+                game_state.set_sitting_out(p.id);
+                p
+            } else {
+                game_state.add_player(player_name.to_string())
+            };
+            // First player to join becomes the host.
+            if game_state.host_id == 0 {
+                game_state.host_id = player.id;
+            }
             (player.id, game_state.player_count())
         };
 

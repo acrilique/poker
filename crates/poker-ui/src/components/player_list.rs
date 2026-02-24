@@ -87,7 +87,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                 }
             }
 
-            // Bottom controls: Start / Sit Out / Exit
+            // Bottom controls: Start / Sit Out / Late Entry / Exit
             div { class: "p-3 border-t border-muted/50 flex flex-col gap-2",
                 // Start game button (lobby only)
                 if !gs.game_started {
@@ -97,6 +97,27 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                             coroutine.send(UiMessage::Action(ClientMessage::StartGame));
                         },
                         "Start Game"
+                    }
+                }
+
+                // Late entry toggle (host only, visible once game has started)
+                if gs.game_started && gs.is_host {
+                    {
+                        let late_entry = gs.allow_late_entry;
+                        let (label, btn_class) = if late_entry {
+                            ("Late Entry: ON", "w-full bg-accent/20 hover:bg-accent/30 rounded-lg py-1.5 text-sm font-semibold text-accent transition")
+                        } else {
+                            ("Late Entry: OFF", "w-full bg-elevated hover:bg-base rounded-lg py-1.5 text-sm font-semibold text-foreground/60 transition")
+                        };
+                        rsx! {
+                            button {
+                                class: "{btn_class}",
+                                onclick: move |_| {
+                                    coroutine.send(UiMessage::Action(ClientMessage::ToggleLateEntry));
+                                },
+                                "{label}"
+                            }
+                        }
                     }
                 }
 

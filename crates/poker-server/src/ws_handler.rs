@@ -76,16 +76,19 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                     } => match room_manager.join_room(rid, name).await {
                         Ok((pid, session_token, player_count, rx, rarc)) => {
                             // Send join confirmation to this player.
-                            let chips = {
+                            let (chips, is_host, allow_late_entry, game_started) = {
                                 let room = rarc.lock().await;
                                 let gs = room.game_state.lock().await;
-                                gs.players.get(&pid).map(|p| p.chips).unwrap_or(0)
+                                let c = gs.players.get(&pid).map(|p| p.chips).unwrap_or(0);
+                                (c, gs.host_id == pid, gs.allow_late_entry, gs.game_started)
                             };
                             let joined = ServerMessage::JoinedGame {
                                 player_id: pid,
                                 chips,
                                 player_count,
-                                session_token,
+                                session_token: session_token.clone(),
+                                is_host,
+                                allow_late_entry,
                             };
                             let blind_config = {
                                 let room = rarc.lock().await;
@@ -115,6 +118,73 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                     })
                                     .collect();
                                 send_one(&ws_sink, &ServerMessage::PlayerList { players }).await;
+                            }
+
+                            // Late join: send full game state snapshot.
+                            if game_started {
+                                let room = rarc.lock().await;
+                                let gs = room.game_state.lock().await;
+
+                                // GameStarted so the client knows the game is running.
+                                send_one(&ws_sink, &ServerMessage::GameStarted).await;
+
+                                // Current hand info.
+                                if gs.hand_number > 0 {
+                                    let n = gs.player_order.len();
+                                    let (dealer_id, sb_id, bb_id) = if n >= 2 {
+                                        let d = gs.player_order[gs.dealer_index % n];
+                                        let sb = gs.player_order[(gs.dealer_index + 1) % n];
+                                        let bb = gs.player_order[(gs.dealer_index + 2) % n];
+                                        (d, sb, bb)
+                                    } else {
+                                        (0, 0, 0)
+                                    };
+                                    send_one(
+                                        &ws_sink,
+                                        &ServerMessage::NewHand {
+                                            hand_number: gs.hand_number,
+                                            dealer_id,
+                                            small_blind_id: sb_id,
+                                            big_blind_id: bb_id,
+                                            small_blind: gs.small_blind,
+                                            big_blind: gs.big_blind,
+                                        },
+                                    )
+                                    .await;
+                                }
+
+                                // Community cards.
+                                if !gs.community_cards.is_empty() {
+                                    let stage = match gs.phase {
+                                        GamePhase::Flop => "flop",
+                                        GamePhase::Turn => "turn",
+                                        GamePhase::River => "river",
+                                        _ => "flop",
+                                    };
+                                    let cards: Vec<poker_core::protocol::CardInfo> =
+                                        gs.community_cards.iter().map(card_to_info).collect();
+                                    send_one(
+                                        &ws_sink,
+                                        &ServerMessage::CommunityCards {
+                                            stage: stage.to_string(),
+                                            cards,
+                                        },
+                                    )
+                                    .await;
+                                }
+
+                                send_one(&ws_sink, &ServerMessage::PotUpdate { pot: gs.pot }).await;
+
+                                // Notify about sitting-out players.
+                                for p in gs.players.values() {
+                                    if p.sitting_out {
+                                        send_one(
+                                            &ws_sink,
+                                            &ServerMessage::PlayerSatOut { player_id: p.id },
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
 
                             room_id = Some(rid.clone());
@@ -309,6 +379,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
             gs.game_started = true;
 
+            // Freeze the starting chip amount for late entries.
+            gs.starting_chips = gs.starting_bbs * gs.big_blind;
+
             // Initialise the blind increase timer if configured.
             if gs.blind_config.is_enabled() {
                 gs.last_blind_increase = Some(std::time::Instant::now());
@@ -374,6 +447,24 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             }
             gs.set_sitting_in(player_id);
             room.broadcast(&ServerMessage::PlayerSatIn { player_id });
+        }
+
+        ClientMessage::ToggleLateEntry => {
+            let room = room_arc.lock().await;
+            let mut gs = room.game_state.lock().await;
+            if gs.host_id != player_id {
+                room.send_to_player(
+                    player_id,
+                    &ServerMessage::Error {
+                        message: "Only the host can toggle late entry".to_string(),
+                    },
+                );
+                return;
+            }
+            gs.allow_late_entry = !gs.allow_late_entry;
+            room.broadcast(&ServerMessage::LateEntryChanged {
+                allowed: gs.allow_late_entry,
+            });
         }
     }
 }

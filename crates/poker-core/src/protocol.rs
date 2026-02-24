@@ -202,6 +202,9 @@ pub enum ClientMessage {
     /// Request to sit back in.
     SitIn,
 
+    /// Toggle late entry (host only).
+    ToggleLateEntry,
+
     /// Re-join a room after a disconnect using a previously issued session token.
     Rejoin {
         room_id: String,
@@ -227,6 +230,12 @@ pub enum ServerMessage {
         /// Session token for reconnection after a disconnect.
         #[serde(default)]
         session_token: String,
+        /// Whether this player is the room host.
+        #[serde(default)]
+        is_host: bool,
+        /// Whether late entry is currently allowed.
+        #[serde(default)]
+        allow_late_entry: bool,
     },
 
     /// A new player joined
@@ -321,6 +330,9 @@ pub enum ServerMessage {
     /// A player is back in (no longer sitting out).
     PlayerSatIn { player_id: u32 },
 
+    /// Late-entry setting changed.
+    LateEntryChanged { allowed: bool },
+
     /// A room was successfully created.
     RoomCreated { room_id: String },
 
@@ -349,6 +361,10 @@ pub enum ServerMessage {
         folded: Vec<u32>,
         #[serde(default)]
         blind_config: BlindConfig,
+        #[serde(default)]
+        allow_late_entry: bool,
+        #[serde(default)]
+        is_host: bool,
         dealer_id: u32,
         small_blind_id: u32,
         big_blind_id: u32,
