@@ -6,11 +6,12 @@ A multiplayer Texas Hold'em poker app with two frontends (web, TUI) connecting t
 
 | Crate | Description |
 |-------|-------------|
-| `poker-core` | Core game logic, protocol, transport abstraction, game state |
+| `poker-core` | Core game logic, protocol types, and transport abstraction |
 | `poker-server` | Multi-room Axum server with WebSocket support |
-| `poker-web` | Dioxus web frontend (WASM) |
+| `poker-client` | Client-side networking, game state, session persistence, and reconnection logic |
+| `poker-ui` | Platform-agnostic Dioxus UI components and application lifecycle |
+| `poker-web` | Thin Dioxus web + PWA shell (WASM) |
 | `poker-tui` | Ratatui terminal frontend |
-| `poker-ui` | Shared Dioxus UI components (used by web frontend) |
 
 ## Quick Start
 

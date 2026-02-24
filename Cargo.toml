@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/poker-core",
+    "crates/poker-client",
     "crates/poker-tui",
     "crates/poker-server",
     "crates/poker-ui",

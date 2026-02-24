@@ -1,9 +1,10 @@
 //! Shared Dioxus UI components for the poker app.
 //!
 //! This crate is platform-agnostic — it provides reusable components,
-//! the shared `UiMessage` type, and the `Screen` enum used by both the
-//! web (`poker-web`) frontend.
+//! the shared `UiMessage` type, the `Screen` enum, and the core
+//! application lifecycle logic (game loop, reconnection, session recovery).
 
+pub mod app_logic;
 pub mod components;
 
 use poker_core::protocol::{BlindConfig, ClientMessage};

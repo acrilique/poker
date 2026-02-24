@@ -1,11 +1,26 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::poker::{Card, CardSuit};
+
 /// Serializable card representation
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CardInfo {
     pub rank: u8, // 2-14 (14 = Ace)
     pub suit: u8, // 0-3 (Diamonds, Spades, Clubs, Hearts)
+}
+
+/// Convert an internal [`Card`] to the wire-level [`CardInfo`].
+pub fn card_to_info(card: &Card) -> CardInfo {
+    CardInfo {
+        rank: card.number() as u8,
+        suit: match card.suit() {
+            CardSuit::Diamonds => 0,
+            CardSuit::Spades => 1,
+            CardSuit::Clubs => 2,
+            CardSuit::Hearts => 3,
+        },
+    }
 }
 
 impl CardInfo {

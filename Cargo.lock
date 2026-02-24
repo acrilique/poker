@@ -2539,20 +2539,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
-name = "poker-core"
+name = "poker-client"
 version = "0.1.0"
 dependencies = [
  "futures-util",
  "getrandom 0.4.1",
  "gloo-net",
- "rand 0.10.0",
+ "poker-core",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-test",
  "tokio-tungstenite",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "poker-core"
+version = "0.1.0"
+dependencies = [
+ "rand 0.10.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2577,6 +2585,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "crossterm",
+ "poker-client",
  "poker-core",
  "ratatui",
  "tokio",
@@ -2587,7 +2596,10 @@ name = "poker-ui"
 version = "0.1.0"
 dependencies = [
  "dioxus",
+ "futures-util",
+ "poker-client",
  "poker-core",
+ "tokio",
 ]
 
 [[package]]
@@ -2595,11 +2607,9 @@ name = "poker-web"
 version = "0.1.0"
 dependencies = [
  "dioxus",
- "futures-util",
  "gloo-timers",
- "poker-core",
+ "poker-client",
  "poker-ui",
- "tokio",
  "web-sys",
 ]
 
@@ -3668,28 +3678,6 @@ checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

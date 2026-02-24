@@ -7,7 +7,7 @@
 //! This module is specific to the TUI binary.
 
 use crate::tui::{Tui, UserIntent};
-use poker_core::client_controller::{ClientController, PollResult};
+use poker_client::client_controller::{ClientController, PollResult};
 use poker_core::protocol::{BlindConfig, ClientMessage};
 
 /// Start the poker client, connecting via WebSocket to the given server/room.
@@ -50,7 +50,7 @@ pub async fn start_client(
                 }
                 // Check for room errors surfaced as events.
                 if let Some(last) = ctrl.state.events.back()
-                    && let poker_core::game_state::GameEvent::ServerError { message } = last
+                    && let poker_client::game_state::GameEvent::ServerError { message } = last
                 {
                     return Err(message.clone().into());
                 }

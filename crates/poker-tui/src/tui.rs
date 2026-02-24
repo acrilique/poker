@@ -21,7 +21,9 @@ use ratatui::{
 };
 use std::io::{self, Stdout};
 
-use poker_core::game_state::{ClientGameState, GameEvent, LogCategory, RAISE_PRESETS, RaisePreset};
+use poker_client::game_state::{
+    ClientGameState, GameEvent, LogCategory, RAISE_PRESETS, RaisePreset,
+};
 use poker_core::protocol::{CardInfo, ClientMessage, PlayerAction, PlayerInfo};
 
 // ---------------------------------------------------------------------------

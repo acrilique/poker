@@ -1,7 +1,7 @@
 //! Game table — community cards, hole cards, pot.
 
 use dioxus::prelude::*;
-use poker_core::game_state::ClientGameState;
+use poker_client::game_state::ClientGameState;
 
 use super::card;
 use crate::{StackDisplayMode, format_stack};

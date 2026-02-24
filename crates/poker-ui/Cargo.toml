@@ -6,5 +6,8 @@ description = "Shared Dioxus UI components for the poker app"
 license = "MIT"
 
 [dependencies]
-poker-core = { path = "../poker-core", default-features = false }
+poker-core = { path = "../poker-core" }
+poker-client = { path = "../poker-client", default-features = false }
 dioxus = "0.7"
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros"] }

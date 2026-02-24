@@ -14,9 +14,9 @@
 
 use crate::game_state::{ClientGameState, GameEvent, LogCategory, StateChanged};
 use crate::net_client::NetClient;
-use crate::protocol::{ClientMessage, ServerMessage};
 #[cfg(feature = "native")]
 use crate::transport::Transport;
+use poker_core::protocol::{ClientMessage, ServerMessage};
 
 /// Outcome of processing a single network event.
 #[derive(Debug)]

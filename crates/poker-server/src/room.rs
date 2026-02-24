@@ -9,8 +9,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
-use poker_core::game_logic::{GameState, card_to_info};
-use poker_core::protocol::{BlindConfig, CardInfo, PlayerInfo, ServerMessage, validate_room_id};
+use crate::game_logic::{GamePhase, GameState, PlayerStatus};
+use poker_core::protocol::{
+    BlindConfig, CardInfo, PlayerInfo, ServerMessage, card_to_info, validate_room_id,
+};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 /// How long a disconnected player's seat is held before permanent removal.
@@ -117,7 +119,7 @@ impl Room {
         let folded: Vec<u32> = gs
             .players
             .values()
-            .filter(|p| p.status == poker_core::game_logic::PlayerStatus::Folded)
+            .filter(|p| p.status == PlayerStatus::Folded)
             .map(|p| p.id)
             .collect();
 
@@ -132,12 +134,12 @@ impl Room {
         let chips = gs.players.get(&player_id).map(|p| p.chips).unwrap_or(0);
 
         let stage = match gs.phase {
-            poker_core::game_logic::GamePhase::Lobby => "Waiting",
-            poker_core::game_logic::GamePhase::PreFlop => "Preflop",
-            poker_core::game_logic::GamePhase::Flop => "Flop",
-            poker_core::game_logic::GamePhase::Turn => "Turn",
-            poker_core::game_logic::GamePhase::River => "River",
-            poker_core::game_logic::GamePhase::Showdown => "Showdown",
+            GamePhase::Lobby => "Waiting",
+            GamePhase::PreFlop => "Preflop",
+            GamePhase::Flop => "Flop",
+            GamePhase::Turn => "Turn",
+            GamePhase::River => "River",
+            GamePhase::Showdown => "Showdown",
         }
         .to_string();
 

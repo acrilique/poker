@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::poker::{Board, Hand, HandRank};
-use crate::protocol::{
+use poker_core::poker::{Board, Hand, HandRank};
+use poker_core::protocol::{
     BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage,
 };
 

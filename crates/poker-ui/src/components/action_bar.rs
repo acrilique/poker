@@ -1,7 +1,7 @@
 //! Action bar — fold/check, call, raise with presets.
 
 use dioxus::prelude::*;
-use poker_core::game_state::{ClientGameState, RAISE_PRESETS, RaisePreset};
+use poker_client::game_state::{ClientGameState, RAISE_PRESETS, RaisePreset};
 use poker_core::protocol::PlayerAction;
 
 use crate::{StackDisplayMode, UiMessage, format_stack};

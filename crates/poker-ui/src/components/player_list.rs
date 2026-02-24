@@ -1,7 +1,7 @@
 //! Player list sidebar.
 
 use dioxus::prelude::*;
-use poker_core::game_state::ClientGameState;
+use poker_client::game_state::ClientGameState;
 use poker_core::protocol::ClientMessage;
 
 use crate::{StackDisplayMode, UiMessage, format_stack};

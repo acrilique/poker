@@ -1,7 +1,7 @@
 //! Event log — scrollable list of game events.
 
 use dioxus::prelude::*;
-use poker_core::game_state::{ClientGameState, GameEvent, LogCategory};
+use poker_client::game_state::{ClientGameState, GameEvent, LogCategory};
 
 #[component]
 pub fn EventLog(state: Signal<ClientGameState>) -> Element {

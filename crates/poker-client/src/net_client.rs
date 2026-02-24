@@ -10,9 +10,9 @@
 
 use tokio::sync::mpsc;
 
-use crate::protocol::{ClientMessage, ServerMessage};
 #[cfg(feature = "native")]
 use crate::transport::{Transport, TransportReader, TransportWriter};
+use poker_core::protocol::{ClientMessage, ServerMessage};
 
 // ---------------------------------------------------------------------------
 // Wire-level parsing

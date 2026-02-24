@@ -6,7 +6,7 @@ description = "Multi-room Axum-based poker server with WebSocket support"
 license = "MIT"
 
 [dependencies]
-poker-core = { path = "../poker-core", features = ["native"] }
+poker-core = { path = "../poker-core" }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }

@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::poker::{Board, Card, CardSuit, Hand, get_all_cards};
-use crate::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage};
+use poker_core::poker::{Board, Card, Hand, get_all_cards};
+use poker_core::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage, card_to_info};
 use rand::rng;
 use rand::seq::SliceRandom;
 
@@ -18,23 +18,6 @@ use rand::seq::SliceRandom;
 /// has not acted by the time it reaches zero, the server forces a *check* (if
 /// allowed) or a *fold*.
 pub const TURN_TIMEOUT_SECS: u32 = 30;
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-/// Convert an internal [`Card`] to the wire-level [`CardInfo`].
-pub fn card_to_info(card: &Card) -> CardInfo {
-    CardInfo {
-        rank: card.number() as u8,
-        suit: match card.suit() {
-            CardSuit::Diamonds => 0,
-            CardSuit::Spades => 1,
-            CardSuit::Clubs => 2,
-            CardSuit::Hearts => 3,
-        },
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -568,7 +551,7 @@ impl GameState {
                         continue;
                     }
                     if let (Some(fi), Some(fj)) = (&full_i, &hand_j.best(&board)) {
-                        use crate::poker::Winner;
+                        use poker_core::poker::Winner;
                         if fi.compare(fj) == Winner::Hand2 {
                             is_winner = false;
                             break;

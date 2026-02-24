@@ -10,10 +10,8 @@ name = "poker-web"
 path = "src/main.rs"
 
 [dependencies]
-poker-core = { path = "../poker-core", default-features = false, features = ["web"] }
+poker-client = { path = "../poker-client", default-features = false, features = ["web"] }
 poker-ui = { path = "../poker-ui" }
 dioxus = { version = "0.7", features = ["web"] }
-futures-util = "0.3"
-tokio = { version = "1", features = ["sync", "macros"] }
 web-sys = { version = "0.3", features = ["Window", "Location", "Storage"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
