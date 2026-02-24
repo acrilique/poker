@@ -780,6 +780,7 @@ fn format_event(event: &GameEvent) -> String {
         GameEvent::PlayerSatIn { name, .. } => {
             format!("✅ {} is back in", name)
         }
+        GameEvent::WaitingForPlayers => "⏸ Waiting for more players to sit in...".to_string(),
     }
 }
 

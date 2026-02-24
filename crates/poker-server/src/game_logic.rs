@@ -106,6 +106,10 @@ pub struct GameState {
     pub host_id: u32,
     /// Starting chip count, frozen at game start for late entries.
     pub starting_chips: u32,
+    /// True when the game is paused because fewer than 2 players are active
+    /// (not sitting out). Cleared when a player sits back in and triggers
+    /// a new hand.
+    pub waiting_for_players: bool,
 }
 
 impl Default for GameState {
@@ -136,6 +140,7 @@ impl Default for GameState {
             allow_late_entry: false,
             host_id: 0,
             starting_chips: 0,
+            waiting_for_players: false,
         }
     }
 }

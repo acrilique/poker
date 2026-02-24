@@ -151,6 +151,10 @@ fn render_event(event: &GameEvent) -> Element {
             format!("{name} is back in"),
             category_color(LogCategory::Info),
         ),
+        GameEvent::WaitingForPlayers => (
+            "Waiting for more players to sit in...".to_string(),
+            category_color(LogCategory::System),
+        ),
     };
 
     rsx! {

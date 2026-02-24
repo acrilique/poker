@@ -113,6 +113,8 @@ pub enum GameEvent {
     PlayerSatOut { player_id: u32, name: String },
     /// A player sat back in.
     PlayerSatIn { player_id: u32, name: String },
+    /// The game is paused waiting for enough active players.
+    WaitingForPlayers,
 }
 
 impl GameEvent {
@@ -147,6 +149,7 @@ impl GameEvent {
             Self::TurnTimerStarted { .. } => LogCategory::System,
             Self::PlayerSatOut { .. } => LogCategory::Info,
             Self::PlayerSatIn { .. } => LogCategory::Info,
+            Self::WaitingForPlayers => LogCategory::System,
         }
     }
 }
@@ -758,6 +761,10 @@ impl ClientGameState {
             }
             ServerMessage::LateEntryChanged { allowed } => {
                 self.allow_late_entry = *allowed;
+                changed.phase = true;
+            }
+            ServerMessage::WaitingForPlayers => {
+                self.add_event(GameEvent::WaitingForPlayers);
                 changed.phase = true;
             }
         }

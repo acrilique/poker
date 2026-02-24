@@ -333,6 +333,9 @@ pub enum ServerMessage {
     /// Late-entry setting changed.
     LateEntryChanged { allowed: bool },
 
+    /// The game is paused waiting for enough active players to continue.
+    WaitingForPlayers,
+
     /// A room was successfully created.
     RoomCreated { room_id: String },
 

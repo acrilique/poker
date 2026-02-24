@@ -447,6 +447,24 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             }
             gs.set_sitting_in(player_id);
             room.broadcast(&ServerMessage::PlayerSatIn { player_id });
+
+            // If the game was paused waiting for players, check whether
+            // we now have enough active players to start a new hand.
+            if gs.waiting_for_players {
+                let active_count = gs
+                    .player_order
+                    .iter()
+                    .filter(|id| {
+                        gs.players
+                            .get(id)
+                            .map(|p| !p.sitting_out && p.chips > 0)
+                            .unwrap_or(false)
+                    })
+                    .count();
+                if active_count >= 2 {
+                    maybe_start_new_hand(&mut gs, &room, room_arc).await;
+                }
+            }
         }
 
         ClientMessage::ToggleLateEntry => {
@@ -679,10 +697,27 @@ async fn process_action(
     }
 }
 
-/// If the game is still running with ≥ 2 players, start the next hand
-/// after a short delay.
+/// If the game is still running with ≥ 2 active (not sitting-out) players,
+/// start the next hand after a short delay. Otherwise pause and wait for
+/// players to sit back in.
 async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
-    if gs.game_started && gs.player_order.len() >= 2 {
+    if !gs.game_started {
+        return;
+    }
+
+    let active_count = gs
+        .player_order
+        .iter()
+        .filter(|id| {
+            gs.players
+                .get(id)
+                .map(|p| !p.sitting_out && p.chips > 0)
+                .unwrap_or(false)
+        })
+        .count();
+
+    if active_count >= 2 {
+        gs.waiting_for_players = false;
         // Drop locks before sleeping would be ideal, but we hold mutable
         // borrows here. Since actions are serialised through the room
         // lock anyway, this should be acceptable.
@@ -693,6 +728,9 @@ async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mu
         }
         send_hole_cards(gs, room);
         notify_turn_and_start_timer(gs, room, room_arc);
+    } else {
+        gs.waiting_for_players = true;
+        room.broadcast(&ServerMessage::WaitingForPlayers);
     }
 }
 
