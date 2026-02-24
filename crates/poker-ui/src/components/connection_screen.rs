@@ -212,11 +212,13 @@ pub fn ConnectionScreen(
                             } else {
                                 "collapsible"
                             },
-                            input {
-                                class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
-                                r#type: "text",
-                                value: "{server_url}",
-                                oninput: move |e| server_url.set(e.value()),
+                            div {
+                                input {
+                                    class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
+                                    r#type: "text",
+                                    value: "{server_url}",
+                                    oninput: move |e| server_url.set(e.value()),
+                                }
                             }
                         }
                     }
