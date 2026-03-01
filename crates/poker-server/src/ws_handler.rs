@@ -909,7 +909,7 @@ fn send_hole_cards(room: &mut Room) {
 /// Locks are acquired and released each iteration so we can sleep between
 /// cards without holding the room lock.
 async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
-    loop {
+    'run_out: loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
         let mut room = room_arc.lock().await;
@@ -969,8 +969,9 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                             if room.game_state.actionable_players().is_empty() {
                                 drop(room);
                                 broadcast_allin_showdown(room_arc).await;
-                                // Re-enter run_out_board (no process_action recursion).
-                                return Box::pin(run_out_board(room_arc)).await;
+                                // Re-enter the outer loop iteratively instead of
+                                // recursing, which would grow the task stack.
+                                continue 'run_out;
                             }
                             if let Some((np, na)) = notify_turn_and_start_timer(&mut room, room_arc)
                             {
