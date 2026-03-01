@@ -16,6 +16,7 @@ use crate::game_state::{ClientGameState, GameEvent, LogCategory, StateChanged};
 use crate::net_client::NetClient;
 #[cfg(feature = "native")]
 use crate::transport::Transport;
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 use crate::transport::TransportError;
 use poker_core::protocol::{ClientMessage, ServerMessage};
 
@@ -61,7 +62,7 @@ impl ClientController {
     ///
     /// No join handshake is sent — the caller should send `JoinRoom` after
     /// construction.
-    #[cfg(any(feature = "native", feature = "web"))]
+    #[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
     pub async fn connect_ws(url: &str, name: &str) -> Result<Self, TransportError> {
         let net = NetClient::connect_ws(url).await?;
         let state = ClientGameState::new(name);

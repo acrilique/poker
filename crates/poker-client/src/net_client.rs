@@ -10,6 +10,7 @@
 
 use tokio::sync::mpsc;
 
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 use crate::transport::TransportError;
 #[cfg(feature = "native")]
 use crate::transport::{Transport, TransportReader, TransportWriter};
@@ -114,7 +115,7 @@ impl NetClient {
     ///
     /// Uses `gloo-net` for the WebSocket and `wasm_bindgen_futures::spawn_local`
     /// for background reader/writer tasks (no `Send` requirement).
-    #[cfg(all(feature = "web", not(feature = "native")))]
+    #[cfg(all(feature = "web", not(feature = "native"), target_arch = "wasm32"))]
     pub async fn connect_ws(url: &str) -> Result<Self, TransportError> {
         use futures_util::{SinkExt, StreamExt};
         use gloo_net::websocket::{Message, futures::WebSocket};

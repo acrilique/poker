@@ -4,8 +4,11 @@
 //! [`ClientController`] and the poker protocol — no UI framework
 //! dependency.
 
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 use crate::client_controller::{ClientController, PollResult};
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 use crate::game_state::GameEvent;
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 use poker_core::protocol::ClientMessage;
 
 // ---------------------------------------------------------------------------
@@ -49,7 +52,7 @@ pub trait SessionStore {
 /// Opens a fresh WebSocket connection, sends `Rejoin`, and waits for the
 /// server to confirm. Returns a fully-connected [`ClientController`] on
 /// success, or `None` if the session is invalid / expired.
-#[cfg(any(feature = "native", feature = "web"))]
+#[cfg(any(feature = "native", all(feature = "web", target_arch = "wasm32")))]
 pub async fn try_rejoin(
     ws_url: &str,
     room_id: &str,
@@ -94,7 +97,7 @@ pub async fn try_rejoin(
     let timeout = pin!(tokio::time::sleep(std::time::Duration::from_secs(
         REJOIN_TIMEOUT_SECS,
     )));
-    #[cfg(all(feature = "web", not(feature = "native")))]
+    #[cfg(all(feature = "web", not(feature = "native"), target_arch = "wasm32"))]
     let timeout = pin!(gloo_timers::future::TimeoutFuture::new(
         (REJOIN_TIMEOUT_SECS * 1000) as u32,
     ));
