@@ -18,6 +18,14 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 /// How long a disconnected player's seat is held before permanent removal.
 const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
+/// Maximum number of players allowed in a single room.
+///
+/// A standard 52-card deck can deal at most 23 two-card hands (with 5
+/// community cards and a burn card per street), but real poker tables
+/// seat at most 9–10 players.  Capping here prevents a deck-exhaustion
+/// panic in `start_new_hand`.
+const MAX_PLAYERS_PER_ROOM: usize = 9;
+
 /// Maximum number of outbound messages buffered per player before the
 /// connection is considered too slow and the sender is dropped.
 const PLAYER_CHANNEL_CAPACITY: usize = 64;
@@ -268,6 +276,9 @@ impl RoomManager {
         // mutating player_senders to avoid overlapping borrows.
         let (player_id, player_count) = {
             let mut game_state = room.game_state.lock().await;
+            if game_state.player_count() >= MAX_PLAYERS_PER_ROOM {
+                return Err(format!("Room is full (max {} players)", MAX_PLAYERS_PER_ROOM));
+            }
             if game_state.game_started && !game_state.allow_late_entry {
                 return Err("Game already in progress".to_string());
             }
