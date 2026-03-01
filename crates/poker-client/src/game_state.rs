@@ -844,7 +844,7 @@ impl ClientGameState {
     pub fn pot_percentage_raise(&self, percentage: u32) -> u32 {
         let to_call = self.current_bet.saturating_sub(self.our_bet);
         let max_raise = self.our_chips.saturating_sub(to_call);
-        (self.pot.saturating_mul(percentage) / 100)
+        ((self.pot as u64 * percentage as u64 / 100) as u32)
             .max(self.min_raise)
             .min(max_raise)
     }
