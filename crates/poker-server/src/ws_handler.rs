@@ -710,8 +710,15 @@ async fn process_action(
                 .entry(player_id)
                 .or_insert(0) += all_in;
             if new_bet > room.game_state.current_bet {
+                // Only reopen betting (set last_raiser_index) if the all-in
+                // constitutes a full legal raise.  A "short all-in" (less than
+                // the minimum raise above the current bet) does NOT give other
+                // players a new opportunity to re-raise.
+                let raise_increment = new_bet - room.game_state.current_bet;
+                if raise_increment >= room.game_state.min_raise {
+                    room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
+                }
                 room.game_state.current_bet = new_bet;
-                room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
             }
             action_amount = Some(all_in);
         }

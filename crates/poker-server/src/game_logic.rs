@@ -164,7 +164,11 @@ impl GameState {
 
     /// Add a player with an optional chip override (used for late entries).
     pub fn add_player_with_chips(&mut self, name: String, chips_override: Option<u32>) -> Player {
-        let bb = if self.starting_big_blind > 0 { self.starting_big_blind } else { self.big_blind };
+        let bb = if self.starting_big_blind > 0 {
+            self.starting_big_blind
+        } else {
+            self.big_blind
+        };
         let starting_chips = chips_override.unwrap_or(self.starting_bbs * bb);
         let player = Player {
             id: self.next_player_id,
@@ -703,26 +707,61 @@ impl GameState {
             // Calculate and award each side pot independently.
             let side_pots = self.calculate_side_pots();
 
+            // Track "dead money" from side pots where all eligible players
+            // folded.  This is carried forward and awarded to the winners of
+            // the next pot that has at least one eligible winner.
+            let mut carry_over: u32 = 0;
+            // Remember the last set of winners so that if the highest side pot
+            // is uncontested we can give the carry-over to the most recent
+            // winners.
+            let mut last_winners: Vec<u32> = Vec::new();
+            let mut last_rank = String::new();
+
             for (pot_amount, eligible) in &side_pots {
                 if eligible.is_empty() {
-                    // All contributors at this tier folded. Distribute evenly
-                    // among the remaining (lower-tier) winners. In practice
-                    // this shouldn't happen because at least one non-folded
-                    // player will be eligible.
+                    // All contributors at this tier folded — accumulate as
+                    // dead money for the next contested pot.
+                    carry_over += pot_amount;
                     continue;
                 }
 
                 let (pot_winners, rank) = Self::find_pot_winners(&hands_to_show, eligible, &board);
 
                 if pot_winners.is_empty() {
+                    carry_over += pot_amount;
                     continue;
                 }
 
+                // Include any accumulated dead money from previous
+                // uncontested pots.
+                let total = pot_amount + carry_over;
+                carry_over = 0;
+
                 let num_winners = u32::try_from(pot_winners.len()).unwrap();
-                let share = pot_amount / num_winners;
-                let remainder = pot_amount % num_winners;
+                let share = total / num_winners;
+                let remainder = total % num_winners;
                 for (i, id) in pot_winners.iter().enumerate() {
                     let entry = winnings.entry(*id).or_insert((0, rank.clone()));
+                    entry.0 += share
+                        + if u32::try_from(i).unwrap() < remainder {
+                            1
+                        } else {
+                            0
+                        };
+                }
+
+                last_winners = pot_winners;
+                last_rank = rank;
+            }
+
+            // If there's still dead money left over (the highest side pot(s)
+            // had no eligible winners), give it to the last known winners.
+            if carry_over > 0 && !last_winners.is_empty() {
+                let num = u32::try_from(last_winners.len()).unwrap();
+                let share = carry_over / num;
+                let remainder = carry_over % num;
+                for (i, id) in last_winners.iter().enumerate() {
+                    let entry = winnings.entry(*id).or_insert((0, last_rank.clone()));
                     entry.0 += share
                         + if u32::try_from(i).unwrap() < remainder {
                             1
