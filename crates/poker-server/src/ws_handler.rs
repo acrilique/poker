@@ -645,7 +645,7 @@ async fn process_action(
             action_amount = Some(call_amount);
         }
         PlayerAction::Raise => {
-            let raise_total = to_call + amount;
+            let raise_total = to_call.saturating_add(amount);
             if raise_total > player.chips {
                 send_to_player(
                     &mut room.player_senders,
