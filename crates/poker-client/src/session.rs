@@ -59,7 +59,7 @@ pub async fn try_rejoin(
     name: &str,
     session_token: &str,
 ) -> Option<ClientController> {
-    use futures_util::future::{select, Either};
+    use futures_util::future::{Either, select};
     use std::pin::pin;
 
     let mut ctrl = ClientController::connect_ws(ws_url, name).await.ok()?;
