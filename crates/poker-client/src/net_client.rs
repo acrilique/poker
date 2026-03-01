@@ -17,6 +17,23 @@ use crate::transport::{Transport, TransportReader, TransportWriter};
 use poker_core::protocol::{ClientMessage, ServerMessage};
 
 // ---------------------------------------------------------------------------
+// Channel capacity constants
+// ---------------------------------------------------------------------------
+
+/// Capacity for the incoming (server → client) message channel.
+///
+/// Bounded to prevent unbounded memory growth if the UI thread falls behind
+/// (e.g. frozen UI, malicious server).  When full the reader task blocks,
+/// applying TCP-level back-pressure to the server.
+const INCOMING_CHANNEL_CAPACITY: usize = 128;
+
+/// Capacity for the outgoing (client → server) command channel.
+///
+/// Human-speed input means this rarely fills up; if it does, `send()` returns
+/// an error rather than blocking the UI thread.
+const OUTGOING_CHANNEL_CAPACITY: usize = 32;
+
+// ---------------------------------------------------------------------------
 // Wire-level parsing
 // ---------------------------------------------------------------------------
 
@@ -41,18 +58,21 @@ pub fn parse_server_line(line: &str) -> Option<ServerMessage> {
 /// convenience method [`connect_ws`](NetClient::connect_ws) (WebSocket).
 ///
 /// The returned client exposes:
-/// - [`incoming`](NetClient::incoming) — an [`mpsc::UnboundedReceiver<ServerMessage>`]
+/// - [`incoming`](NetClient::incoming) — an [`mpsc::Receiver<ServerMessage>`]
 ///   for server messages. The channel closing signals disconnection.
 /// - [`send`](NetClient::send) — a non-async, non-blocking method to enqueue
 ///   a [`ClientMessage`] for transmission.
+///
+/// Both internal channels are **bounded** so that a slow UI or a malicious
+/// server cannot cause unbounded memory growth.
 ///
 /// Background tasks handle the actual I/O, making this safe to use from
 /// any async context.
 pub struct NetClient {
     /// Receive parsed server messages. Channel close = disconnected.
-    pub incoming: mpsc::UnboundedReceiver<ServerMessage>,
+    pub incoming: mpsc::Receiver<ServerMessage>,
     /// Send-side of the writer channel (kept for [`Self::send`]).
-    outgoing: mpsc::UnboundedSender<ClientMessage>,
+    outgoing: mpsc::Sender<ClientMessage>,
 }
 
 impl NetClient {
@@ -69,8 +89,8 @@ impl NetClient {
     pub fn from_transport<T: Transport>(transport: T) -> Self {
         let (reader, writer) = transport.split();
 
-        let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
+        let (msg_tx, msg_rx) = mpsc::channel(INCOMING_CHANNEL_CAPACITY);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(OUTGOING_CHANNEL_CAPACITY);
 
         Self::spawn_reader_task(reader, msg_tx);
         Self::spawn_writer_task(writer, cmd_rx);
@@ -103,8 +123,8 @@ impl NetClient {
     ///
     /// This is non-blocking — the message is written to a channel and the
     /// background writer task handles the actual I/O.
-    pub fn send(&self, msg: ClientMessage) -> Result<(), mpsc::error::SendError<ClientMessage>> {
-        self.outgoing.send(msg)
+    pub fn send(&self, msg: ClientMessage) -> Result<(), mpsc::error::TrySendError<ClientMessage>> {
+        self.outgoing.try_send(msg)
     }
 
     // ------------------------------------------------------------------
@@ -124,8 +144,8 @@ impl NetClient {
             .map_err(|e| TransportError::Io(format!("WebSocket connect failed: {e}")))?;
         let (mut sink, mut stream) = ws.split();
 
-        let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
+        let (msg_tx, msg_rx) = mpsc::channel(INCOMING_CHANNEL_CAPACITY);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientMessage>(OUTGOING_CHANNEL_CAPACITY);
 
         // Reader task (spawn_local — no Send required)
         wasm_bindgen_futures::spawn_local(async move {
@@ -133,7 +153,7 @@ impl NetClient {
                 match frame {
                     Ok(Message::Text(text)) => {
                         if let Some(msg) = parse_server_line(&text)
-                            && msg_tx.send(msg).is_err()
+                            && msg_tx.send(msg).await.is_err()
                         {
                             break;
                         }
@@ -172,12 +192,12 @@ impl NetClient {
     #[cfg(feature = "native")]
     fn spawn_reader_task<R: TransportReader>(
         mut reader: R,
-        msg_tx: mpsc::UnboundedSender<ServerMessage>,
+        msg_tx: mpsc::Sender<ServerMessage>,
     ) {
         tokio::spawn(async move {
             while let Ok(Some(line)) = reader.recv().await {
                 if let Some(msg) = parse_server_line(&line)
-                    && msg_tx.send(msg).is_err()
+                    && msg_tx.send(msg).await.is_err()
                 {
                     break;
                 }
@@ -190,7 +210,7 @@ impl NetClient {
     #[cfg(feature = "native")]
     fn spawn_writer_task<W: TransportWriter>(
         mut writer: W,
-        mut cmd_rx: mpsc::UnboundedReceiver<ClientMessage>,
+        mut cmd_rx: mpsc::Receiver<ClientMessage>,
     ) {
         tokio::spawn(async move {
             while let Some(msg) = cmd_rx.recv().await {
