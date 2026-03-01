@@ -348,10 +348,16 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         }
 
         ClientMessage::Chat { message } => {
+            const MAX_CHAT_LEN: usize = 256;
+            let message = if message.len() > MAX_CHAT_LEN {
+                message[..MAX_CHAT_LEN].to_string()
+            } else {
+                message.to_string()
+            };
             let mut room = room_arc.lock().await;
             let chat = ServerMessage::ChatMessage {
                 player_id,
-                message: message.clone(),
+                message,
             };
             room.broadcast(&chat);
         }
