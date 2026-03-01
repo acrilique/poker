@@ -279,6 +279,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                 break;
             }
         }
+        // If the channel is dropped (e.g. due to being full), close the WebSocket
+        // to ensure the read loop also terminates and the player is fully disconnected.
+        let mut sink = write_sink.lock().await;
+        let _ = sink.close().await;
     });
 
     // Read loop: deserialize ClientMessage, process, route responses.
@@ -504,8 +508,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     })
                     .count();
                 if active_count >= 2 {
-                    let sitting_out = maybe_start_new_hand(&mut room, room_arc).await;
                     drop(room);
+                    let sitting_out = maybe_start_new_hand(room_arc).await;
                     if let Some((pid, act)) = sitting_out {
                         process_action(pid, act, 0, room_arc).await;
                     }
@@ -740,7 +744,9 @@ async fn process_action(
             for m in &msgs {
                 broadcast(&mut room.player_senders, m);
             }
-            if let Some((pid, act)) = maybe_start_new_hand(&mut room, room_arc).await {
+            drop(room);
+            if let Some((pid, act)) = maybe_start_new_hand(room_arc).await {
+                room = room_arc.lock().await;
                 apply_sitting_out_action(&mut room, pid, act);
                 continue;
             }
@@ -753,7 +759,9 @@ async fn process_action(
                 for m in &msgs {
                     broadcast(&mut room.player_senders, m);
                 }
-                if let Some((pid, act)) = maybe_start_new_hand(&mut room, room_arc).await {
+                drop(room);
+                if let Some((pid, act)) = maybe_start_new_hand(room_arc).await {
+                    room = room_arc.lock().await;
                     apply_sitting_out_action(&mut room, pid, act);
                     continue;
                 }
@@ -799,44 +807,53 @@ async fn process_action(
 ///
 /// Returns `Some((player_id, action))` if the first player of the new hand
 /// is sitting out, so the caller can process their auto-action synchronously.
-async fn maybe_start_new_hand(
-    room: &mut Room,
-    room_arc: &Arc<Mutex<Room>>,
-) -> Option<(u32, PlayerAction)> {
-    if !room.game_state.game_started {
+async fn maybe_start_new_hand(room_arc: &Arc<Mutex<Room>>) -> Option<(u32, PlayerAction)> {
+    // check conditions under a brief lock.
+    let should_start = {
+        let mut room = room_arc.lock().await;
+        if !room.game_state.game_started {
+            return None;
+        }
+
+        let active_count = room
+            .game_state
+            .player_order
+            .iter()
+            .filter(|id| {
+                room.game_state
+                    .players
+                    .get(id)
+                    .map(|p| !p.sitting_out && p.chips > 0)
+                    .unwrap_or(false)
+            })
+            .count();
+
+        if active_count >= 2 {
+            room.game_state.waiting_for_players = false;
+            true
+        } else {
+            room.game_state.waiting_for_players = true;
+            broadcast(&mut room.player_senders, &ServerMessage::WaitingForPlayers);
+            false
+        }
+    }; // lock released
+
+    if !should_start {
         return None;
     }
 
-    let active_count = room
-        .game_state
-        .player_order
-        .iter()
-        .filter(|id| {
-            room.game_state
-                .players
-                .get(id)
-                .map(|p| !p.sitting_out && p.chips > 0)
-                .unwrap_or(false)
-        })
-        .count();
+    // delay *without* holding the room lock so that chat,
+    // sit-out, ping and other messages can still be processed.
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-    if active_count >= 2 {
-        room.game_state.waiting_for_players = false;
-        // Since actions are serialised through the room lock anyway,
-        // sleeping while holding it is acceptable.
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        let hand_msgs = room.game_state.start_new_hand();
-        for m in &hand_msgs {
-            broadcast(&mut room.player_senders, m);
-        }
-        send_hole_cards(room);
-        return notify_turn_and_start_timer(room, room_arc);
-    } else {
-        room.game_state.waiting_for_players = true;
-        broadcast(&mut room.player_senders, &ServerMessage::WaitingForPlayers);
+    // re-acquire the lock and start the hand.
+    let mut room = room_arc.lock().await;
+    let hand_msgs = room.game_state.start_new_hand();
+    for m in &hand_msgs {
+        broadcast(&mut room.player_senders, m);
     }
-
-    None
+    send_hole_cards(&mut room);
+    notify_turn_and_start_timer(&mut room, room_arc)
 }
 
 /// Send each player their private hole cards.
@@ -875,7 +892,9 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
             }
             // Handle the new hand inline (with a loop for sitting-out
             // players) to avoid process_action <-> run_out_board recursion.
-            if let Some((mut pid, mut act)) = maybe_start_new_hand(&mut room, room_arc).await {
+            drop(room);
+            if let Some((mut pid, mut act)) = maybe_start_new_hand(room_arc).await {
+                let mut room = room_arc.lock().await;
                 loop {
                     apply_sitting_out_action(&mut room, pid, act);
 
@@ -884,7 +903,9 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                         for m in &hand_msgs {
                             broadcast(&mut room.player_senders, m);
                         }
-                        if let Some((np, na)) = maybe_start_new_hand(&mut room, room_arc).await {
+                        drop(room);
+                        if let Some((np, na)) = maybe_start_new_hand(room_arc).await {
+                            room = room_arc.lock().await;
                             pid = np;
                             act = na;
                             continue;
@@ -898,8 +919,9 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                             for m in &hand_msgs {
                                 broadcast(&mut room.player_senders, m);
                             }
-                            if let Some((np, na)) = maybe_start_new_hand(&mut room, room_arc).await
-                            {
+                            drop(room);
+                            if let Some((np, na)) = maybe_start_new_hand(room_arc).await {
+                                room = room_arc.lock().await;
                                 pid = np;
                                 act = na;
                                 continue;
