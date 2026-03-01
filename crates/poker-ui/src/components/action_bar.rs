@@ -60,10 +60,9 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                                 button {
                                     class: "{btn_class}",
                                     onclick: {
-                                        let gs_clone = gs.clone();
                                         move |_| {
                                             if is_allin {
-                                                if let Ok(msg) = gs_clone.raise(0, true) {
+                                                if let Ok(msg) = state.read().raise(0, true) {
                                                     coroutine.send(UiMessage::Action(msg));
                                                 }
                                             } else if mode == StackDisplayMode::Blinds && bb > 0 {
@@ -93,9 +92,8 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                     button {
                         class: "px-4 py-2 rounded-lg font-semibold transition {fold_check_style(can_check)}",
                         onclick: {
-                            let gs_clone = gs.clone();
                             move |_| {
-                                if let Some(msg) = gs_clone.fold_or_check() {
+                                if let Some(msg) = state.read().fold_or_check() {
                                     coroutine.send(UiMessage::Action(msg));
                                 }
                             }
@@ -109,9 +107,8 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                     button {
                         class: "px-4 py-2 bg-primary hover:bg-primary-light rounded-lg font-semibold text-foreground transition",
                         onclick: {
-                            let gs_clone = gs.clone();
                             move |_| {
-                                if let Some(msg) = gs_clone.call() {
+                                if let Some(msg) = state.read().call() {
                                     coroutine.send(UiMessage::Action(msg));
                                 }
                             }
@@ -122,37 +119,48 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
 
                 // Raise input + button
                 if can_raise || can_allin {
-                    div { class: "flex items-center gap-2",
-                        div { class: "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent",
-                            input {
-                                class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none",
-                                r#type: "number",
-                                placeholder: "Amount",
-                                value: "{raise_input}",
-                                oninput: move |e| raise_input.set(e.value()),
-                            }
-                            span { class: "pr-3 text-foreground/50 text-sm select-none",
-                                if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "chips" }
-                            }
-                        }
-                        button {
-                            class: "px-4 py-2 bg-accent hover:bg-accent-light rounded-lg font-semibold text-base transition",
-                            onclick: {
-                                let gs_clone = gs.clone();
-                                move |_| {
-                                    let raw: f64 = raise_input.read().parse().unwrap_or(0.0);
-                                    let amount: u32 = if mode == StackDisplayMode::Blinds && bb > 0 {
-                                        (raw * bb as f64).round() as u32
-                                    } else {
-                                        raw as u32
-                                    };
-                                    match gs_clone.raise(amount, false) {
-                                        Ok(msg) => coroutine.send(UiMessage::Action(msg)),
-                                        Err(_e) => {} // TODO: show error feedback
+                    {
+                        let valid_raise = raise_input.read().parse::<f64>().is_ok();
+                        let raise_disabled_class = if valid_raise {
+                            "px-4 py-2 bg-accent hover:bg-accent-light rounded-lg font-semibold text-base transition"
+                        } else {
+                            "px-4 py-2 bg-accent/50 rounded-lg font-semibold text-base/50 transition cursor-not-allowed"
+                        };
+                        rsx! {
+                            div { class: "flex items-center gap-2",
+                                div { class: "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent",
+                                    input {
+                                        class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none",
+                                        r#type: "number",
+                                        placeholder: "Amount",
+                                        value: "{raise_input}",
+                                        oninput: move |e| raise_input.set(e.value()),
+                                    }
+                                    span { class: "pr-3 text-foreground/50 text-sm select-none",
+                                        if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "chips" }
                                     }
                                 }
-                            },
-                            "Raise"
+                                button {
+                                    class: "{raise_disabled_class}",
+                                    disabled: !valid_raise,
+                                    onclick: {
+                                        move |_| {
+                                            if let Ok(raw) = raise_input.read().parse::<f64>() {
+                                                let amount: u32 = if mode == StackDisplayMode::Blinds && bb > 0 {
+                                                    (raw * bb as f64).round() as u32
+                                                } else {
+                                                    raw as u32
+                                                };
+                                                match state.read().raise(amount, false) {
+                                                    Ok(msg) => coroutine.send(UiMessage::Action(msg)),
+                                                    Err(_e) => {} // TODO: show error feedback
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "Raise"
+                                }
+                            }
                         }
                     }
                 }
