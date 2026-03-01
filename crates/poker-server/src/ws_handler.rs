@@ -405,7 +405,12 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             send_hole_cards(&gs, &mut room);
 
             // Notify the current player it's their turn and start the timer.
-            notify_turn_and_start_timer(&gs, &mut room, room_arc);
+            let sitting_out = notify_turn_and_start_timer(&gs, &mut room, room_arc);
+            drop(gs);
+            drop(room);
+            if let Some((pid, act)) = sitting_out {
+                process_action(pid, act, 0, room_arc).await;
+            }
         }
 
         // ── Betting actions ─────────────────────────────────────────
@@ -470,7 +475,12 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     })
                     .count();
                 if active_count >= 2 {
-                    maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
+                    let sitting_out = maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
+                    drop(gs);
+                    drop(room);
+                    if let Some((pid, act)) = sitting_out {
+                        process_action(pid, act, 0, room_arc).await;
+                    }
                 }
             }
         }
@@ -668,54 +678,81 @@ async fn process_action(
     gs.next_player();
 
     // ── Post-action: check hand / betting status ─────────────────────
-    if gs.active_player_count() == 1 {
-        let msgs = gs.resolve_hand();
-        for m in &msgs {
-            room.broadcast(m);
-        }
-        maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
-        return;
-    }
-
-    if gs.is_betting_complete() {
-        if gs.phase == GamePhase::River {
+    // Loop to process any sitting-out players synchronously rather than
+    // spawning delayed tasks (which are susceptible to race conditions).
+    loop {
+        if gs.active_player_count() == 1 {
             let msgs = gs.resolve_hand();
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
-        } else {
-            // Advance to next phase.
-            let phase_msgs = gs.advance_phase();
-            for m in &phase_msgs {
-                room.broadcast(m);
+            if let Some((pid, act)) = maybe_start_new_hand(&mut gs, &mut room, room_arc).await {
+                apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                continue;
             }
+            return;
+        }
 
-            // If only all-in players remain, run it out.
-            if gs.actionable_players().is_empty() {
-                broadcast_allin_showdown(&gs, &mut room);
-
-                // Release locks before the timed loop so we can
-                // cleanly re-acquire them each iteration.
-                drop(gs);
-                drop(room);
-
-                run_out_board(room_arc).await;
+        if gs.is_betting_complete() {
+            if gs.phase == GamePhase::River {
+                let msgs = gs.resolve_hand();
+                for m in &msgs {
+                    room.broadcast(m);
+                }
+                if let Some((pid, act)) = maybe_start_new_hand(&mut gs, &mut room, room_arc).await {
+                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                    continue;
+                }
+                return;
             } else {
-                notify_turn_and_start_timer(&gs, &mut room, room_arc);
+                // Advance to next phase.
+                let phase_msgs = gs.advance_phase();
+                for m in &phase_msgs {
+                    room.broadcast(m);
+                }
+
+                // If only all-in players remain, run it out.
+                if gs.actionable_players().is_empty() {
+                    broadcast_allin_showdown(&gs, &mut room);
+
+                    // Release locks before the timed loop so we can
+                    // cleanly re-acquire them each iteration.
+                    drop(gs);
+                    drop(room);
+
+                    run_out_board(room_arc).await;
+                    return;
+                }
+
+                if let Some((pid, act)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
+                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                    continue;
+                }
+                return;
             }
         }
-    } else {
-        notify_turn_and_start_timer(&gs, &mut room, room_arc);
+
+        if let Some((pid, act)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
+            apply_sitting_out_action(&mut gs, &mut room, pid, act);
+            continue;
+        }
+        return;
     }
 }
 
 /// If the game is still running with ≥ 2 active (not sitting-out) players,
 /// start the next hand after a short delay. Otherwise pause and wait for
 /// players to sit back in.
-async fn maybe_start_new_hand(gs: &mut GameState, room: &mut Room, room_arc: &Arc<Mutex<Room>>) {
+///
+/// Returns `Some((player_id, action))` if the first player of the new hand
+/// is sitting out, so the caller can process their auto-action synchronously.
+async fn maybe_start_new_hand(
+    gs: &mut GameState,
+    room: &mut Room,
+    room_arc: &Arc<Mutex<Room>>,
+) -> Option<(u32, PlayerAction)> {
     if !gs.game_started {
-        return;
+        return None;
     }
 
     let active_count = gs
@@ -740,11 +777,13 @@ async fn maybe_start_new_hand(gs: &mut GameState, room: &mut Room, room_arc: &Ar
             room.broadcast(m);
         }
         send_hole_cards(gs, room);
-        notify_turn_and_start_timer(gs, room, room_arc);
+        return notify_turn_and_start_timer(gs, room, room_arc);
     } else {
         gs.waiting_for_players = true;
         room.broadcast(&ServerMessage::WaitingForPlayers);
     }
+
+    None
 }
 
 /// Send each player their private hole cards.
@@ -779,7 +818,74 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
+            // Handle the new hand inline (with a loop for sitting-out
+            // players) to avoid process_action <-> run_out_board recursion.
+            if let Some((mut pid, mut act)) =
+                maybe_start_new_hand(&mut gs, &mut room, room_arc).await
+            {
+                loop {
+                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+
+                    if gs.active_player_count() == 1 {
+                        let hand_msgs = gs.resolve_hand();
+                        for m in &hand_msgs {
+                            room.broadcast(m);
+                        }
+                        if let Some((np, na)) =
+                            maybe_start_new_hand(&mut gs, &mut room, room_arc).await
+                        {
+                            pid = np;
+                            act = na;
+                            continue;
+                        }
+                        break;
+                    }
+
+                    if gs.is_betting_complete() {
+                        if gs.phase == GamePhase::River {
+                            let hand_msgs = gs.resolve_hand();
+                            for m in &hand_msgs {
+                                room.broadcast(m);
+                            }
+                            if let Some((np, na)) =
+                                maybe_start_new_hand(&mut gs, &mut room, room_arc).await
+                            {
+                                pid = np;
+                                act = na;
+                                continue;
+                            }
+                            break;
+                        } else {
+                            let phase_msgs = gs.advance_phase();
+                            for m in &phase_msgs {
+                                room.broadcast(m);
+                            }
+                            if gs.actionable_players().is_empty() {
+                                broadcast_allin_showdown(&gs, &mut room);
+                                drop(gs);
+                                drop(room);
+                                // Re-enter run_out_board (no process_action recursion).
+                                return Box::pin(run_out_board(room_arc)).await;
+                            }
+                            if let Some((np, na)) =
+                                notify_turn_and_start_timer(&gs, &mut room, room_arc)
+                            {
+                                pid = np;
+                                act = na;
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+
+                    if let Some((np, na)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
+                        pid = np;
+                        act = na;
+                        continue;
+                    }
+                    break;
+                }
+            }
             return;
         }
     }
@@ -808,45 +914,82 @@ fn send_turn_notification(gs: &GameState, room: &mut Room) {
     }
 }
 
+/// Apply a sitting-out player's auto-action (Check or Fold) inline.
+///
+/// This is used by the post-action loop to process consecutive sitting-out
+/// players synchronously without dropping and re-acquiring locks.
+fn apply_sitting_out_action(
+    gs: &mut GameState,
+    room: &mut Room,
+    player_id: u32,
+    action: PlayerAction,
+) {
+    match action {
+        PlayerAction::Fold => {
+            if let Some(p) = gs.players.get_mut(&player_id) {
+                p.status = PlayerStatus::Folded;
+            }
+        }
+        PlayerAction::Check => {
+            if gs.phase == GamePhase::PreFlop && gs.big_blind_option {
+                gs.big_blind_option = false;
+                gs.last_raiser_index = None;
+            }
+        }
+        _ => {
+            tracing::error!(?action, "Unexpected sitting-out auto-action");
+            return;
+        }
+    }
+
+    room.broadcast(&ServerMessage::PlayerActed {
+        player_id,
+        action,
+        amount: None,
+    });
+    room.broadcast(&ServerMessage::PotUpdate { pot: gs.pot });
+
+    gs.has_acted_this_round = true;
+    gs.next_player();
+}
+
 /// Send the turn notification **and** start a 30-second turn timer.
 ///
 /// Increments the room's turn counter so any previously-spawned timer
 /// becomes a no-op, then spawns a new background task that will force a
 /// check-or-fold when the timeout elapses.
 ///
-/// If the current player is sitting out, their action is resolved
-/// immediately (auto-check or auto-fold) instead of waiting for input.
-fn notify_turn_and_start_timer(gs: &GameState, room: &mut Room, room_arc: &Arc<Mutex<Room>>) {
+/// If the current player is sitting out, their action is returned
+/// synchronously as `Some((player_id, action))` so the caller can
+/// process it immediately without spawning a delayed task.
+fn notify_turn_and_start_timer(
+    gs: &GameState,
+    room: &mut Room,
+    room_arc: &Arc<Mutex<Room>>,
+) -> Option<(u32, PlayerAction)> {
     // Send the private YourTurn message to the current player.
     send_turn_notification(gs, room);
 
-    let Some(current_id) = gs.current_player_id() else {
-        return;
-    };
+    let current_id = gs.current_player_id()?;
 
     // Increment the turn counter to invalidate any stale timer tasks.
     let turn = room.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
     if gs.is_current_player_sitting_out() {
-        // Sitting-out player: resolve immediately (no timer broadcast).
+        // Sitting-out player: return the auto-action for the caller to
+        // process synchronously, avoiding a spawned task race condition.
         let valid = gs.valid_actions(current_id);
         let action = if valid.contains(&PlayerAction::Check) {
             PlayerAction::Check
         } else {
             PlayerAction::Fold
         };
-        let room_arc_clone = Arc::clone(room_arc);
-        tokio::spawn(async move {
-            // Small delay so the turn notification is delivered first.
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            tracing::info!(
-                player = current_id,
-                ?action,
-                "Sitting-out player, auto-acting"
-            );
-            process_action(current_id, action, 0, &room_arc_clone).await;
-        });
-        return;
+        tracing::info!(
+            player = current_id,
+            ?action,
+            "Sitting-out player, auto-acting"
+        );
+        return Some((current_id, action));
     }
 
     // Broadcast the timer start to all players so UIs can show a countdown.
@@ -866,6 +1009,8 @@ fn notify_turn_and_start_timer(gs: &GameState, room: &mut Room, room_arc: &Arc<M
             force_timeout_action(room_arc_clone, turn, current_id).await;
         }
     });
+
+    None
 }
 
 /// Force a check-or-fold for a player whose turn timer has expired.
