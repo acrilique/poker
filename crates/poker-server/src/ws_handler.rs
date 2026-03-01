@@ -376,7 +376,14 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
         ClientMessage::Chat { message } => {
             const MAX_CHAT_LEN: usize = 256;
-            let message: String = message.chars().take(MAX_CHAT_LEN).collect();
+            let truncated: String = message.chars().take(MAX_CHAT_LEN).collect();
+            // Escape HTML-sensitive characters to prevent XSS when rendered.
+            let message = truncated
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&#x27;");
             let mut room = room_arc.lock().await;
             let chat = ServerMessage::ChatMessage { player_id, message };
             broadcast(&mut room.player_senders, &chat);
