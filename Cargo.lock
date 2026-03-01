@@ -2561,6 +2561,7 @@ dependencies = [
  "rand 0.10.0",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2573,6 +2574,7 @@ dependencies = [
  "rand 0.10.0",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tower-http",
  "tracing",
@@ -2588,6 +2590,7 @@ dependencies = [
  "poker-client",
  "poker-core",
  "ratatui",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

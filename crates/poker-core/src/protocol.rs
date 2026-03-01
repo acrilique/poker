@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use thiserror::Error;
+
 use crate::poker::{Card, CardSuit};
 
 /// Serializable card representation
@@ -392,18 +394,31 @@ pub enum ServerMessage {
 // Room ID validation
 // ---------------------------------------------------------------------------
 
+/// Errors that can occur when validating a room ID.
+#[derive(Debug, Clone, Error)]
+pub enum RoomIdError {
+    #[error("Room ID cannot be empty")]
+    Empty,
+
+    #[error("Room ID must be fewer than 20 characters")]
+    TooLong,
+
+    #[error("Room ID must be alphanumeric")]
+    InvalidChars,
+}
+
 /// Validate a room ID.
 ///
 /// Room IDs must be non-empty, alphanumeric, and fewer than 20 characters.
-pub fn validate_room_id(id: &str) -> Result<(), String> {
+pub fn validate_room_id(id: &str) -> Result<(), RoomIdError> {
     if id.is_empty() {
-        return Err("Room ID cannot be empty".to_string());
+        return Err(RoomIdError::Empty);
     }
     if id.len() >= 20 {
-        return Err("Room ID must be fewer than 20 characters".to_string());
+        return Err(RoomIdError::TooLong);
     }
     if !id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("Room ID must be alphanumeric".to_string());
+        return Err(RoomIdError::InvalidChars);
     }
     Ok(())
 }

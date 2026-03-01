@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 #[cfg(feature = "native")]
 use crate::transport::{Transport, TransportReader, TransportWriter};
+use crate::transport::TransportError;
 use poker_core::protocol::{ClientMessage, ServerMessage};
 
 // ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ impl NetClient {
     /// No handshake messages are sent automatically — the caller should send
     /// `JoinRoom` (or `CreateRoom` + `JoinRoom`) after construction.
     #[cfg(feature = "native")]
-    pub async fn connect_ws(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn connect_ws(url: &str) -> Result<Self, TransportError> {
         let transport = crate::ws_transport::WsTransport::connect(url).await?;
         Ok(Self::from_transport(transport))
     }
@@ -114,11 +115,12 @@ impl NetClient {
     /// Uses `gloo-net` for the WebSocket and `wasm_bindgen_futures::spawn_local`
     /// for background reader/writer tasks (no `Send` requirement).
     #[cfg(all(feature = "web", not(feature = "native")))]
-    pub async fn connect_ws(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn connect_ws(url: &str) -> Result<Self, TransportError> {
         use futures_util::{SinkExt, StreamExt};
         use gloo_net::websocket::{Message, futures::WebSocket};
 
-        let ws = WebSocket::open(url).map_err(|e| format!("WebSocket connect failed: {e}"))?;
+        let ws = WebSocket::open(url)
+            .map_err(|e| TransportError::Io(format!("WebSocket connect failed: {e}")))?;
         let (mut sink, mut stream) = ws.split();
 
         let (msg_tx, msg_rx) = mpsc::unbounded_channel();

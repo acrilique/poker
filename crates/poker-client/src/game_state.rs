@@ -4,6 +4,27 @@ use poker_core::poker::{Board, Hand, HandRank};
 use poker_core::protocol::{
     BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage,
 };
+use thiserror::Error;
+
+/// Errors that can occur when building a player action.
+#[derive(Debug, Clone, Error)]
+pub enum ActionError {
+    /// The player tried to act when it is not their turn.
+    #[error("Not your turn")]
+    NotYourTurn,
+
+    /// The raise amount was zero (or negative).
+    #[error("Raise amount must be greater than 0")]
+    InvalidRaiseAmount,
+
+    /// A normal raise is unavailable but all-in is; hint the player.
+    #[error("Raise not available. Select All-In and press Raise.")]
+    RaiseUnavailableAllInPossible,
+
+    /// Raise is not an available action at all.
+    #[error("Raise not available")]
+    RaiseUnavailable,
+}
 
 /// A revealed hand during showdown, for direct UI display.
 #[derive(Debug, Clone)]
@@ -796,10 +817,10 @@ impl ClientGameState {
 
     /// Validate and build a raise `ClientMessage`.
     ///
-    /// Returns `Err(message)` with a user-facing error string on invalid input.
-    pub fn raise(&self, amount: u32, is_all_in: bool) -> Result<ClientMessage, String> {
+    /// Returns an [`ActionError`] on invalid input.
+    pub fn raise(&self, amount: u32, is_all_in: bool) -> Result<ClientMessage, ActionError> {
         if !self.is_our_turn {
-            return Err("Not your turn".to_string());
+            return Err(ActionError::NotYourTurn);
         }
         let can_raise = self.has_action(PlayerAction::Raise);
         let can_allin = self.has_action(PlayerAction::AllIn);
@@ -808,13 +829,13 @@ impl ClientGameState {
             return Ok(ClientMessage::AllIn);
         }
         if amount == 0 {
-            return Err("Raise amount must be greater than 0".to_string());
+            return Err(ActionError::InvalidRaiseAmount);
         }
         if !can_raise {
             if can_allin {
-                return Err("Raise not available. Select All-In and press Raise.".to_string());
+                return Err(ActionError::RaiseUnavailableAllInPossible);
             }
-            return Err("Raise not available".to_string());
+            return Err(ActionError::RaiseUnavailable);
         }
         Ok(ClientMessage::Raise { amount })
     }

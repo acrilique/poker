@@ -69,7 +69,7 @@ pub fn ConnectionScreen(
             return;
         }
         if let Err(e) = validate_room_id(&r) {
-            validation_error.set(e);
+            validation_error.set(e.to_string());
             return;
         }
 

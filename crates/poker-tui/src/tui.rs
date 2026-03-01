@@ -277,7 +277,7 @@ fn handle_control_activation(
                 match gs.raise(0, true) {
                     Ok(msg) => return UserIntent::Send(msg),
                     Err(e) => {
-                        return UserIntent::Feedback(e, LogCategory::Error);
+                        return UserIntent::Feedback(e.to_string(), LogCategory::Error);
                     }
                 }
             }
@@ -292,7 +292,7 @@ fn handle_control_activation(
             };
             match gs.raise(amount, false) {
                 Ok(msg) => UserIntent::Send(msg),
-                Err(e) => UserIntent::Feedback(e, LogCategory::Error),
+                Err(e) => UserIntent::Feedback(e.to_string(), LogCategory::Error),
             }
         }
     }

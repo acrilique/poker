@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use crate::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_core::protocol::{
-    BlindConfig, CardInfo, PlayerInfo, ServerMessage, card_to_info, validate_room_id,
+    BlindConfig, CardInfo, PlayerInfo, RoomIdError, ServerMessage, card_to_info, validate_room_id,
 };
+use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 /// How long a disconnected player's seat is held before permanent removal.
@@ -36,6 +37,42 @@ const MAX_ACTIVE_ROOMS: usize = 100;
 /// Maximum number of outbound messages buffered per player before the
 /// connection is considered too slow and the sender is dropped.
 const PLAYER_CHANNEL_CAPACITY: usize = 128;
+
+/// Errors returned by [`RoomManager`] operations.
+#[derive(Debug, Error)]
+pub enum RoomError {
+    /// The room ID failed validation.
+    #[error(transparent)]
+    InvalidRoomId(#[from] RoomIdError),
+
+    /// The server-wide room limit has been reached.
+    #[error("Server room limit reached (max {MAX_ACTIVE_ROOMS}). Try again later.")]
+    ServerFull,
+
+    /// A room with the requested ID already exists.
+    #[error("Room '{0}' already exists")]
+    RoomAlreadyExists(String),
+
+    /// No room exists with the given ID.
+    #[error("Room '{0}' not found")]
+    RoomNotFound(String),
+
+    /// The room has no open seats.
+    #[error("Room is full (max {MAX_PLAYERS_PER_ROOM} players)")]
+    RoomFull,
+
+    /// The game is already running and late entry is disabled.
+    #[error("Game already in progress")]
+    GameInProgress,
+
+    /// The session token does not match any known session.
+    #[error("Invalid or expired session token")]
+    InvalidSession,
+
+    /// The player's session was valid but the player was already removed.
+    #[error("Session expired — player was removed")]
+    SessionExpired,
+}
 
 /// Handle to a per-player outbound channel.
 ///
@@ -246,23 +283,21 @@ impl RoomManager {
 
     /// Create a new room with the given ID.
     ///
-    /// Returns an error string if the room ID is invalid or already taken.
+    /// Returns an error if the room ID is invalid or already taken.
     pub async fn create_room(
         &self,
         room_id: &str,
         blind_config: BlindConfig,
         starting_bbs: u32,
-    ) -> Result<(), String> {
+    ) -> Result<(), RoomError> {
         validate_room_id(room_id)?;
 
         let mut rooms = self.rooms.write().await;
         if rooms.len() >= MAX_ACTIVE_ROOMS {
-            return Err(format!(
-                "Server room limit reached (max {MAX_ACTIVE_ROOMS}). Try again later."
-            ));
+            return Err(RoomError::ServerFull);
         }
         if rooms.contains_key(room_id) {
-            return Err(format!("Room '{}' already exists", room_id));
+            return Err(RoomError::RoomAlreadyExists(room_id.to_string()));
         }
         rooms.insert(
             room_id.to_string(),
@@ -285,22 +320,19 @@ impl RoomManager {
         &self,
         room_id: &str,
         player_name: &str,
-    ) -> Result<(u32, String, usize, PlayerRx, Arc<Mutex<Room>>), String> {
+    ) -> Result<(u32, String, usize, PlayerRx, Arc<Mutex<Room>>), RoomError> {
         let room_arc = self
             .get_room(room_id)
             .await
-            .ok_or_else(|| format!("Room '{}' not found", room_id))?;
+            .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
 
         let mut room = room_arc.lock().await;
 
         if room.game_state.player_count() >= MAX_PLAYERS_PER_ROOM {
-            return Err(format!(
-                "Room is full (max {} players)",
-                MAX_PLAYERS_PER_ROOM
-            ));
+            return Err(RoomError::RoomFull);
         }
         if room.game_state.game_started && !room.game_state.allow_late_entry {
-            return Err("Game already in progress".to_string());
+            return Err(RoomError::GameInProgress);
         }
         let player = if room.game_state.game_started {
             // Late entry: give the frozen starting chip amount.
@@ -346,25 +378,25 @@ impl RoomManager {
         &self,
         room_id: &str,
         session_token: &str,
-    ) -> Result<(u32, PlayerRx, Arc<Mutex<Room>>), String> {
+    ) -> Result<(u32, PlayerRx, Arc<Mutex<Room>>), RoomError> {
         let room_arc = self
             .get_room(room_id)
             .await
-            .ok_or_else(|| format!("Room '{}' not found", room_id))?;
+            .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
 
         let mut room = room_arc.lock().await;
 
         let player_id = *room
             .sessions
             .get(session_token)
-            .ok_or_else(|| "Invalid or expired session token".to_string())?;
+            .ok_or(RoomError::InvalidSession)?;
 
         // Verify the player still exists in game state.
         if !room.game_state.players.contains_key(&player_id) {
             // Token was valid but player was already fully removed.
             room.sessions.remove(session_token);
             room.player_sessions.remove(&player_id);
-            return Err("Session expired — player was removed".to_string());
+            return Err(RoomError::SessionExpired);
         }
 
         // Clear the disconnected-at timestamp (cancel grace period).

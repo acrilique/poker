@@ -8,7 +8,29 @@
 
 use crate::tui::{Tui, UserIntent};
 use poker_client::client_controller::{ClientController, PollResult};
+use poker_client::transport::TransportError;
 use poker_core::protocol::{BlindConfig, ClientMessage};
+use thiserror::Error;
+
+/// Errors that can occur during the TUI client lifecycle.
+#[derive(Debug, Error)]
+pub enum ClientError {
+    /// Failed to connect to the server.
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+
+    /// The server rejected the room join/create request.
+    #[error("{0}")]
+    RoomError(String),
+
+    /// Lost connection before the join handshake completed.
+    #[error("Disconnected before joining room")]
+    DisconnectedBeforeJoin,
+
+    /// A terminal I/O error (rendering, input, etc.).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
 
 /// Start the poker client, connecting via WebSocket to the given server/room.
 ///
@@ -18,7 +40,7 @@ pub async fn start_client(
     room_id: &str,
     name: &str,
     create: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), ClientError> {
     // Build the WS URL (append /ws if the user didn't already).
     let ws_url = if server_url.ends_with("/ws") {
         server_url.to_string()
@@ -52,11 +74,11 @@ pub async fn start_client(
                 if let Some(last) = ctrl.state.events.back()
                     && let poker_client::game_state::GameEvent::ServerError { message } = last
                 {
-                    return Err(message.clone().into());
+                    return Err(ClientError::RoomError(message.clone()));
                 }
             }
             PollResult::Disconnected => {
-                return Err("Disconnected before joining room".into());
+                return Err(ClientError::DisconnectedBeforeJoin);
             }
             PollResult::Empty => {}
         }
@@ -76,7 +98,7 @@ pub async fn start_client(
 async fn run_event_loop(
     tui: &mut Tui,
     ctrl: &mut ClientController,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), ClientError> {
     loop {
         tui.render(&ctrl.state)?;
 
