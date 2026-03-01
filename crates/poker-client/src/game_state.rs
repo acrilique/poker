@@ -341,8 +341,11 @@ impl ClientGameState {
     }
 
     /// Convenience: append a [`GameEvent::Text`] for ad-hoc messages.
-    pub fn add_message(&mut self, text: String, category: LogCategory) {
-        self.add_event(GameEvent::Text { text, category });
+    pub fn add_message(&mut self, text: impl Into<String>, category: LogCategory) {
+        self.add_event(GameEvent::Text {
+            text: text.into(),
+            category,
+        });
     }
 
     /// Returns true if the given action is currently valid.
@@ -743,7 +746,7 @@ impl ClientGameState {
                 self.is_our_turn = false;
                 self.valid_actions.clear();
                 self.showdown_hands.clear();
-                self.add_message("Reconnected to game.".to_string(), LogCategory::System);
+                self.add_message("Reconnected to game.", LogCategory::System);
                 changed.players = true;
                 changed.cards = true;
                 changed.pot = true;

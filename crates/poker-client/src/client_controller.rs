@@ -129,7 +129,7 @@ impl ClientController {
     ///
     /// Frontends should call this instead of mutating `ClientGameState`
     /// directly, keeping the controller as the single mutation gateway.
-    pub fn add_message(&mut self, text: String, category: LogCategory) {
+    pub fn add_message(&mut self, text: impl Into<String>, category: LogCategory) {
         self.state.add_message(text, category);
     }
 

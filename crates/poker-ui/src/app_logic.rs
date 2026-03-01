@@ -118,7 +118,7 @@ pub async fn run_with_reconnect<F, Fut>(
         }
 
         ctrl.add_message(
-            "Connection lost. Attempting to reconnect…".to_string(),
+            "Connection lost. Attempting to reconnect…",
             LogCategory::System,
         );
         game_state.set(ctrl.snapshot());
@@ -149,7 +149,7 @@ pub async fn run_with_reconnect<F, Fut>(
 
         if !reconnected {
             ctrl.add_message(
-                "Could not reconnect. Session may have expired.".to_string(),
+                "Could not reconnect. Session may have expired.",
                 LogCategory::Error,
             );
             game_state.set(ctrl.snapshot());
