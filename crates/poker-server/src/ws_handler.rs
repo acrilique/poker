@@ -591,6 +591,7 @@ async fn process_action(
                 }
             }
             gs.pot += call_amount;
+            *gs.pot_contributions.entry(player_id).or_insert(0) += call_amount;
             action_amount = Some(call_amount);
         }
         PlayerAction::Raise => {
@@ -628,6 +629,7 @@ async fn process_action(
                 }
             }
             gs.pot += raise_total;
+            *gs.pot_contributions.entry(player_id).or_insert(0) += raise_total;
             gs.current_bet = new_bet;
             gs.min_raise = gs.big_blind;
             gs.last_raiser_index = Some(gs.current_player_index);
@@ -645,6 +647,7 @@ async fn process_action(
                 p.status = PlayerStatus::AllIn;
             }
             gs.pot += all_in;
+            *gs.pot_contributions.entry(player_id).or_insert(0) += all_in;
             if new_bet > gs.current_bet {
                 gs.current_bet = new_bet;
                 gs.last_raiser_index = Some(gs.current_player_index);

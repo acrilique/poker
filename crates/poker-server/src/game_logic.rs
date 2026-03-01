@@ -110,6 +110,9 @@ pub struct GameState {
     /// (not sitting out). Cleared when a player sits back in and triggers
     /// a new hand.
     pub waiting_for_players: bool,
+    /// Total chips each player has contributed to the pot in the current hand
+    /// (across all betting rounds).  Used for side-pot calculation.
+    pub pot_contributions: HashMap<u32, u32>,
 }
 
 impl Default for GameState {
@@ -141,6 +144,7 @@ impl Default for GameState {
             host_id: 0,
             starting_chips: 0,
             waiting_for_players: false,
+            pot_contributions: HashMap::new(),
         }
     }
 }
@@ -262,6 +266,7 @@ impl GameState {
         self.hand_number += 1;
         self.phase = GamePhase::PreFlop;
         self.pot = 0;
+        self.pot_contributions.clear();
         self.current_bet = 0;
         self.community_cards.clear();
         self.new_deck();
@@ -348,6 +353,7 @@ impl GameState {
             player.chips -= actual;
             player.current_bet = actual;
             self.pot += actual;
+            *self.pot_contributions.entry(player_id).or_insert(0) += actual;
             if player.chips == 0 {
                 player.status = PlayerStatus::AllIn;
             }
@@ -529,7 +535,120 @@ impl GameState {
         messages
     }
 
-    /// Determine winner(s) and distribute pot.
+    /// Calculate side pots from player contributions.
+    ///
+    /// Returns a list of `(pot_amount, eligible_player_ids)` tuples sorted
+    /// from main pot (lowest contribution tier) to highest side pot.
+    /// "Eligible" means the player contributed enough **and** has not folded.
+    fn calculate_side_pots(&self) -> Vec<(u32, Vec<u32>)> {
+        // Gather every player's total contribution (including folded players).
+        let contributions: Vec<(u32, u32)> = self
+            .pot_contributions
+            .iter()
+            .filter(|&(_, &amount)| amount > 0)
+            .map(|(&id, &amount)| (id, amount))
+            .collect();
+
+        if contributions.is_empty() {
+            return Vec::new();
+        }
+
+        // Unique contribution levels, ascending.
+        let mut levels: Vec<u32> = contributions.iter().map(|(_, a)| *a).collect();
+        levels.sort();
+        levels.dedup();
+
+        let mut side_pots: Vec<(u32, Vec<u32>)> = Vec::new();
+        let mut prev_level = 0u32;
+
+        for &level in &levels {
+            let layer = level - prev_level;
+            if layer == 0 {
+                continue;
+            }
+
+            // How many players contributed at least `level` chips total?
+            let contributors: usize = contributions.iter().filter(|(_, a)| *a >= level).count();
+
+            let pot_amount = layer * contributors as u32;
+
+            // Only non-folded players who contributed at least `level` are
+            // eligible to *win* this sub-pot.
+            let eligible: Vec<u32> = contributions
+                .iter()
+                .filter(|(id, a)| {
+                    *a >= level
+                        && self
+                            .players
+                            .get(id)
+                            .map(|p| {
+                                p.status == PlayerStatus::Active || p.status == PlayerStatus::AllIn
+                            })
+                            .unwrap_or(false)
+                })
+                .map(|(id, _)| *id)
+                .collect();
+
+            if pot_amount > 0 {
+                side_pots.push((pot_amount, eligible));
+            }
+
+            prev_level = level;
+        }
+
+        side_pots
+    }
+
+    /// Find the winner(s) of a pot among a set of eligible player hands.
+    ///
+    /// Returns the winning player IDs and the hand rank description.
+    fn find_pot_winners(
+        hands: &[(u32, [CardInfo; 2], Hand)],
+        eligible: &[u32],
+        board: &Board,
+    ) -> (Vec<u32>, String) {
+        let eligible_hands: Vec<&(u32, [CardInfo; 2], Hand)> = hands
+            .iter()
+            .filter(|(id, _, _)| eligible.contains(id))
+            .collect();
+
+        if eligible_hands.len() <= 1 {
+            let id = eligible_hands.first().map(|(id, _, _)| *id).unwrap_or(0);
+            return (vec![id], "Winner".to_string());
+        }
+
+        let mut winning_ids: Vec<u32> = Vec::new();
+        let mut best_rank = String::new();
+
+        for (id_i, _, hand_i) in &eligible_hands {
+            let full_i = hand_i.best(board);
+            let mut is_winner = true;
+
+            for (id_j, _, hand_j) in &eligible_hands {
+                if id_i == id_j {
+                    continue;
+                }
+                if let (Some(fi), Some(fj)) = (&full_i, &hand_j.best(board)) {
+                    use poker_core::poker::Winner;
+                    if fi.compare(fj) == Winner::Hand2 {
+                        is_winner = false;
+                        break;
+                    }
+                }
+            }
+
+            if is_winner {
+                if let Some(full) = &full_i {
+                    best_rank = format!("{}", full.rank());
+                }
+                winning_ids.push(*id_i);
+            }
+        }
+
+        (winning_ids, best_rank)
+    }
+
+    /// Determine winner(s) and distribute pot using side-pot logic.
     pub fn resolve_hand(&mut self) -> Vec<ServerMessage> {
         let mut messages = Vec::new();
 
@@ -551,46 +670,15 @@ impl GameState {
 
         let board = self.build_board();
 
-        let mut winners: Vec<(u32, u32, String)> = Vec::new();
+        // Accumulate winnings per player across all side pots.
+        let mut winnings: HashMap<u32, (u32, String)> = HashMap::new();
 
         if hands_to_show.len() == 1 {
+            // Everyone else folded — sole survivor takes the whole pot.
             let (id, _, _) = &hands_to_show[0];
-            winners.push((*id, self.pot, "Winner".to_string()));
+            winnings.insert(*id, (self.pot, "Winner".to_string()));
         } else {
-            let mut winning_ids: Vec<u32> = Vec::new();
-            let mut best_rank = String::new();
-
-            for i in 0..hands_to_show.len() {
-                let (id_i, _, hand_i) = &hands_to_show[i];
-                let full_i = hand_i.best(&board);
-
-                let mut is_winner = true;
-                for (j, (_, _, hand_j)) in hands_to_show.iter().enumerate() {
-                    if i == j {
-                        continue;
-                    }
-                    if let (Some(fi), Some(fj)) = (&full_i, &hand_j.best(&board)) {
-                        use poker_core::poker::Winner;
-                        if fi.compare(fj) == Winner::Hand2 {
-                            is_winner = false;
-                            break;
-                        }
-                    }
-                }
-
-                if is_winner {
-                    if let Some(full) = full_i {
-                        best_rank = format!("{}", full.rank());
-                    }
-                    winning_ids.push(*id_i);
-                }
-            }
-
-            let share = self.pot / winning_ids.len() as u32;
-            for id in winning_ids {
-                winners.push((id, share, best_rank.clone()));
-            }
-
+            // Emit showdown message so clients see all hands.
             let showdown_hands: Vec<(u32, [CardInfo; 2], String)> = hands_to_show
                 .iter()
                 .map(|(id, cards, hand)| {
@@ -606,7 +694,40 @@ impl GameState {
             messages.push(ServerMessage::Showdown {
                 hands: showdown_hands,
             });
+
+            // Calculate and award each side pot independently.
+            let side_pots = self.calculate_side_pots();
+
+            for (pot_amount, eligible) in &side_pots {
+                if eligible.is_empty() {
+                    // All contributors at this tier folded. Distribute evenly
+                    // among the remaining (lower-tier) winners. In practice
+                    // this shouldn't happen because at least one non-folded
+                    // player will be eligible.
+                    continue;
+                }
+
+                let (pot_winners, rank) = Self::find_pot_winners(&hands_to_show, eligible, &board);
+
+                if pot_winners.is_empty() {
+                    continue;
+                }
+
+                let share = pot_amount / pot_winners.len() as u32;
+                for id in &pot_winners {
+                    let entry = winnings.entry(*id).or_insert((0, rank.clone()));
+                    entry.0 += share;
+                }
+            }
         }
+
+        // Build the winners list and award chips.
+        let mut winners: Vec<(u32, u32, String)> = winnings
+            .into_iter()
+            .map(|(id, (amount, rank))| (id, amount, rank))
+            .collect();
+        // Sort by player ID for deterministic ordering.
+        winners.sort_by_key(|(id, _, _)| *id);
 
         for (winner_id, amount, _) in &winners {
             if let Some(player) = self.players.get_mut(winner_id) {
