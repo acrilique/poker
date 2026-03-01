@@ -41,7 +41,7 @@ pub type PlayerRx = mpsc::Receiver<ServerMessage>;
 /// A single poker room.
 pub struct Room {
     /// Server-side game state (deck, hands, betting, etc.).
-    pub game_state: Arc<Mutex<GameState>>,
+    pub game_state: GameState,
     /// Per-player outbound senders keyed by player ID.
     pub player_senders: HashMap<u32, PlayerTx>,
     /// Blind increase configuration for this room.
@@ -63,7 +63,7 @@ impl Room {
         gs.blind_config = blind_config;
         gs.starting_bbs = starting_bbs;
         Self {
-            game_state: Arc::new(Mutex::new(gs)),
+            game_state: gs,
             player_senders: HashMap::new(),
             blind_config,
             turn_counter: Arc::new(AtomicU64::new(0)),
@@ -72,53 +72,59 @@ impl Room {
             disconnected_at: HashMap::new(),
         }
     }
+}
 
-    /// Send a message to a specific player.
-    ///
-    /// Uses `try_send` to avoid blocking.  If the channel is full the
-    /// player's sender is dropped, which will cause the write task to
-    /// terminate and trigger a disconnect.
-    pub fn send_to_player(&mut self, player_id: u32, msg: &ServerMessage) {
-        if let Some(tx) = self.player_senders.get(&player_id)
-            && tx.try_send(msg.clone()).is_err()
-        {
-            tracing::warn!(
-                player = player_id,
-                "Channel full or closed — dropping sender"
-            );
-            self.player_senders.remove(&player_id);
+/// Send a message to a specific player.
+///
+/// Uses `try_send` to avoid blocking. If the channel is full the
+/// player's sender is dropped, which will cause the write task to
+/// terminate and trigger a disconnect.
+pub fn send_to_player(senders: &mut HashMap<u32, PlayerTx>, player_id: u32, msg: &ServerMessage) {
+    if let Some(tx) = senders.get(&player_id)
+        && tx.try_send(msg.clone()).is_err()
+    {
+        tracing::warn!(
+            player = player_id,
+            "Channel full or closed — dropping sender"
+        );
+        senders.remove(&player_id);
+    }
+}
+
+/// Broadcast a message to **all** connected players in this room.
+///
+/// Senders whose channels are full are removed (see [`send_to_player`]).
+pub fn broadcast(senders: &mut HashMap<u32, PlayerTx>, msg: &ServerMessage) {
+    senders.retain(|&pid, tx| {
+        if tx.try_send(msg.clone()).is_err() {
+            tracing::warn!(player = pid, "Channel full or closed — dropping sender");
+            false
+        } else {
+            true
         }
-    }
+    });
+}
 
-    /// Broadcast a message to **all** connected players in this room.
-    ///
-    /// Senders whose channels are full are removed (see [`send_to_player`]).
-    pub fn broadcast(&mut self, msg: &ServerMessage) {
-        self.player_senders.retain(|&pid, tx| {
-            if tx.try_send(msg.clone()).is_err() {
-                tracing::warn!(player = pid, "Channel full or closed — dropping sender");
-                false
-            } else {
-                true
-            }
-        });
-    }
+/// Broadcast a message to all connected players **except** `exclude_id`.
+pub fn broadcast_except(
+    senders: &mut HashMap<u32, PlayerTx>,
+    msg: &ServerMessage,
+    exclude_id: u32,
+) {
+    senders.retain(|&pid, tx| {
+        if pid == exclude_id {
+            return true; // keep but skip
+        }
+        if tx.try_send(msg.clone()).is_err() {
+            tracing::warn!(player = pid, "Channel full or closed — dropping sender");
+            false
+        } else {
+            true
+        }
+    });
+}
 
-    /// Broadcast a message to all connected players **except** `exclude_id`.
-    pub fn broadcast_except(&mut self, msg: &ServerMessage, exclude_id: u32) {
-        self.player_senders.retain(|&pid, tx| {
-            if pid == exclude_id {
-                return true; // keep but skip
-            }
-            if tx.try_send(msg.clone()).is_err() {
-                tracing::warn!(player = pid, "Channel full or closed — dropping sender");
-                false
-            } else {
-                true
-            }
-        });
-    }
-
+impl Room {
     /// Register a session token for a player.
     pub fn register_session(&mut self, player_id: u32, token: String) {
         self.sessions.insert(token.clone(), player_id);
@@ -129,11 +135,11 @@ impl Room {
     /// reconnecting player.
     pub fn build_rejoin_snapshot(
         &self,
-        gs: &GameState,
         room_id: &str,
         player_id: u32,
         session_token: &str,
     ) -> ServerMessage {
+        let gs = &self.game_state;
         let players: Vec<PlayerInfo> = gs
             .players
             .values()
@@ -275,35 +281,33 @@ impl RoomManager {
 
         let mut room = room_arc.lock().await;
 
-        // Lock game_state, validate, add player, then drop before
-        // mutating player_senders to avoid overlapping borrows.
-        let (player_id, player_count) = {
-            let mut game_state = room.game_state.lock().await;
-            if game_state.player_count() >= MAX_PLAYERS_PER_ROOM {
-                return Err(format!(
-                    "Room is full (max {} players)",
-                    MAX_PLAYERS_PER_ROOM
-                ));
-            }
-            if game_state.game_started && !game_state.allow_late_entry {
-                return Err("Game already in progress".to_string());
-            }
-            let player = if game_state.game_started {
-                // Late entry: give the frozen starting chip amount.
-                let chips = game_state.starting_chips;
-                let p = game_state.add_player_with_chips(player_name.to_string(), Some(chips));
-                // Late-joiners sit out until the next hand.
-                game_state.set_sitting_out(p.id);
-                p
-            } else {
-                game_state.add_player(player_name.to_string())
-            };
-            // First player to join becomes the host.
-            if game_state.host_id == 0 {
-                game_state.host_id = player.id;
-            }
-            (player.id, game_state.player_count())
+        if room.game_state.player_count() >= MAX_PLAYERS_PER_ROOM {
+            return Err(format!(
+                "Room is full (max {} players)",
+                MAX_PLAYERS_PER_ROOM
+            ));
+        }
+        if room.game_state.game_started && !room.game_state.allow_late_entry {
+            return Err("Game already in progress".to_string());
+        }
+        let player = if room.game_state.game_started {
+            // Late entry: give the frozen starting chip amount.
+            let chips = room.game_state.starting_chips;
+            let p = room
+                .game_state
+                .add_player_with_chips(player_name.to_string(), Some(chips));
+            // Late-joiners sit out until the next hand.
+            room.game_state.set_sitting_out(p.id);
+            p
+        } else {
+            room.game_state.add_player(player_name.to_string())
         };
+        // First player to join becomes the host.
+        if room.game_state.host_id == 0 {
+            room.game_state.host_id = player.id;
+        }
+        let player_id = player.id;
+        let player_count = room.game_state.player_count();
 
         let session_token = generate_session_token();
         room.register_session(player_id, session_token.clone());
@@ -316,7 +320,7 @@ impl RoomManager {
             player_id,
             name: player_name.to_string(),
         };
-        room.broadcast_except(&join_msg, player_id);
+        broadcast_except(&mut room.player_senders, &join_msg, player_id);
 
         drop(room);
 
@@ -344,11 +348,7 @@ impl RoomManager {
             .ok_or_else(|| "Invalid or expired session token".to_string())?;
 
         // Verify the player still exists in game state.
-        let player_exists = {
-            let gs = room.game_state.lock().await;
-            gs.players.contains_key(&player_id)
-        };
-        if !player_exists {
+        if !room.game_state.players.contains_key(&player_id) {
             // Token was valid but player was already fully removed.
             room.sessions.remove(session_token);
             room.player_sessions.remove(&player_id);
@@ -377,25 +377,26 @@ impl RoomManager {
         let mut room = room_arc.lock().await;
         room.player_senders.remove(&player_id);
 
-        let game_in_progress = {
-            let gs_arc = Arc::clone(&room.game_state);
-            let mut gs = gs_arc.lock().await;
-            if gs.game_started && gs.players.contains_key(&player_id) {
+        let game_in_progress =
+            if room.game_state.game_started && room.game_state.players.contains_key(&player_id) {
                 // Sit the player out so auto-check/fold kicks in.
-                if !gs
+                if !room
+                    .game_state
                     .players
                     .get(&player_id)
                     .map(|p| p.sitting_out)
                     .unwrap_or(true)
                 {
-                    gs.set_sitting_out(player_id);
-                    room.broadcast(&ServerMessage::PlayerSatOut { player_id });
+                    room.game_state.set_sitting_out(player_id);
+                    broadcast(
+                        &mut room.player_senders,
+                        &ServerMessage::PlayerSatOut { player_id },
+                    );
                 }
                 true
             } else {
                 false
-            }
-        };
+            };
 
         if game_in_progress {
             // Keep the player in game state; start the grace-period countdown.
@@ -430,11 +431,11 @@ impl RoomManager {
                         if let Some(token) = room.player_sessions.remove(&player_id) {
                             room.sessions.remove(&token);
                         }
-                        {
-                            let mut gs = room.game_state.lock().await;
-                            gs.remove_player(player_id);
-                        }
-                        room.broadcast(&ServerMessage::PlayerLeft { player_id });
+                        room.game_state.remove_player(player_id);
+                        broadcast(
+                            &mut room.player_senders,
+                            &ServerMessage::PlayerLeft { player_id },
+                        );
                         tracing::info!(
                             room = %rid,
                             player = player_id,
@@ -463,11 +464,11 @@ impl RoomManager {
             if let Some(token) = room.player_sessions.remove(&player_id) {
                 room.sessions.remove(&token);
             }
-            {
-                let mut gs = room.game_state.lock().await;
-                gs.remove_player(player_id);
-            }
-            room.broadcast(&ServerMessage::PlayerLeft { player_id });
+            room.game_state.remove_player(player_id);
+            broadcast(
+                &mut room.player_senders,
+                &ServerMessage::PlayerLeft { player_id },
+            );
 
             let is_empty = room.player_senders.is_empty();
             drop(room);

@@ -11,14 +11,14 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::game_logic::{GamePhase, GameState, PlayerStatus, TURN_TIMEOUT_SECS};
+use crate::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use poker_core::poker::{Hand, calculate_equity_multi};
 use poker_core::protocol::{CardInfo, ClientMessage, PlayerAction, ServerMessage, card_to_info};
 use tokio::sync::Mutex;
 
-use crate::room::{PlayerRx, Room, RoomManager};
+use crate::room::{PlayerRx, Room, RoomManager, broadcast, send_to_player};
 
 /// Drive a single WebSocket connection.
 ///
@@ -78,9 +78,18 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             // Send join confirmation to this player.
                             let (chips, is_host, allow_late_entry, game_started) = {
                                 let room = rarc.lock().await;
-                                let gs = room.game_state.lock().await;
-                                let c = gs.players.get(&pid).map(|p| p.chips).unwrap_or(0);
-                                (c, gs.host_id == pid, gs.allow_late_entry, gs.game_started)
+                                let c = room
+                                    .game_state
+                                    .players
+                                    .get(&pid)
+                                    .map(|p| p.chips)
+                                    .unwrap_or(0);
+                                (
+                                    c,
+                                    room.game_state.host_id == pid,
+                                    room.game_state.allow_late_entry,
+                                    room.game_state.game_started,
+                                )
                             };
                             let joined = ServerMessage::JoinedGame {
                                 player_id: pid,
@@ -107,8 +116,8 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             // Send the full player list so the newcomer sees existing participants.
                             {
                                 let room = rarc.lock().await;
-                                let gs = room.game_state.lock().await;
-                                let players: Vec<poker_core::protocol::PlayerInfo> = gs
+                                let players: Vec<poker_core::protocol::PlayerInfo> = room
+                                    .game_state
                                     .players
                                     .values()
                                     .map(|p| poker_core::protocol::PlayerInfo {
@@ -123,18 +132,20 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             // Late join: send full game state snapshot.
                             if game_started {
                                 let room = rarc.lock().await;
-                                let gs = room.game_state.lock().await;
 
                                 // GameStarted so the client knows the game is running.
                                 send_one(&ws_sink, &ServerMessage::GameStarted).await;
 
                                 // Current hand info.
-                                if gs.hand_number > 0 {
-                                    let n = gs.player_order.len();
+                                if room.game_state.hand_number > 0 {
+                                    let n = room.game_state.player_order.len();
                                     let (dealer_id, sb_id, bb_id) = if n >= 2 {
-                                        let d = gs.player_order[gs.dealer_index % n];
-                                        let sb = gs.player_order[(gs.dealer_index + 1) % n];
-                                        let bb = gs.player_order[(gs.dealer_index + 2) % n];
+                                        let d = room.game_state.player_order
+                                            [room.game_state.dealer_index % n];
+                                        let sb = room.game_state.player_order
+                                            [(room.game_state.dealer_index + 1) % n];
+                                        let bb = room.game_state.player_order
+                                            [(room.game_state.dealer_index + 2) % n];
                                         (d, sb, bb)
                                     } else {
                                         (0, 0, 0)
@@ -142,27 +153,31 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                     send_one(
                                         &ws_sink,
                                         &ServerMessage::NewHand {
-                                            hand_number: gs.hand_number,
+                                            hand_number: room.game_state.hand_number,
                                             dealer_id,
                                             small_blind_id: sb_id,
                                             big_blind_id: bb_id,
-                                            small_blind: gs.small_blind,
-                                            big_blind: gs.big_blind,
+                                            small_blind: room.game_state.small_blind,
+                                            big_blind: room.game_state.big_blind,
                                         },
                                     )
                                     .await;
                                 }
 
                                 // Community cards.
-                                if !gs.community_cards.is_empty() {
-                                    let stage = match gs.phase {
+                                if !room.game_state.community_cards.is_empty() {
+                                    let stage = match room.game_state.phase {
                                         GamePhase::Flop => "flop",
                                         GamePhase::Turn => "turn",
                                         GamePhase::River => "river",
                                         _ => "flop",
                                     };
-                                    let cards: Vec<poker_core::protocol::CardInfo> =
-                                        gs.community_cards.iter().map(card_to_info).collect();
+                                    let cards: Vec<poker_core::protocol::CardInfo> = room
+                                        .game_state
+                                        .community_cards
+                                        .iter()
+                                        .map(card_to_info)
+                                        .collect();
                                     send_one(
                                         &ws_sink,
                                         &ServerMessage::CommunityCards {
@@ -173,10 +188,16 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                     .await;
                                 }
 
-                                send_one(&ws_sink, &ServerMessage::PotUpdate { pot: gs.pot }).await;
+                                send_one(
+                                    &ws_sink,
+                                    &ServerMessage::PotUpdate {
+                                        pot: room.game_state.pot,
+                                    },
+                                )
+                                .await;
 
                                 // Notify about sitting-out players.
-                                for p in gs.players.values() {
+                                for p in room.game_state.players.values() {
                                     if p.sitting_out {
                                         send_one(
                                             &ws_sink,
@@ -205,8 +226,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             // Build and send a full state snapshot.
                             let snapshot = {
                                 let room = rarc.lock().await;
-                                let gs = room.game_state.lock().await;
-                                room.build_rejoin_snapshot(&gs, rid, pid, session_token)
+                                room.build_rejoin_snapshot(rid, pid, session_token)
                             };
                             send_one(&ws_sink, &snapshot).await;
 
@@ -317,7 +337,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         | ClientMessage::JoinRoom { .. }
         | ClientMessage::Rejoin { .. } => {
             let mut room = room_arc.lock().await;
-            room.send_to_player(
+            send_to_player(
+                &mut room.player_senders,
                 player_id,
                 &ServerMessage::Error {
                     message: "Already in a room".to_string(),
@@ -327,14 +348,13 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
         ClientMessage::Ping => {
             let mut room = room_arc.lock().await;
-            room.send_to_player(player_id, &ServerMessage::Pong);
+            send_to_player(&mut room.player_senders, player_id, &ServerMessage::Pong);
         }
 
         ClientMessage::GetPlayers => {
             let mut room = room_arc.lock().await;
-            let gs_arc = Arc::clone(&room.game_state);
-            let gs = gs_arc.lock().await;
-            let players = gs
+            let players = room
+                .game_state
                 .players
                 .values()
                 .map(|p| poker_core::protocol::PlayerInfo {
@@ -343,8 +363,11 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     chips: p.chips,
                 })
                 .collect();
-            drop(gs);
-            room.send_to_player(player_id, &ServerMessage::PlayerList { players });
+            send_to_player(
+                &mut room.player_senders,
+                player_id,
+                &ServerMessage::PlayerList { players },
+            );
         }
 
         ClientMessage::Chat { message } => {
@@ -356,16 +379,15 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             };
             let mut room = room_arc.lock().await;
             let chat = ServerMessage::ChatMessage { player_id, message };
-            room.broadcast(&chat);
+            broadcast(&mut room.player_senders, &chat);
         }
 
         ClientMessage::StartGame => {
             let mut room = room_arc.lock().await;
-            let gs_arc = Arc::clone(&room.game_state);
-            let mut gs = gs_arc.lock().await;
 
-            if gs.game_started {
-                room.send_to_player(
+            if room.game_state.game_started {
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
                         message: "Game already started".to_string(),
@@ -373,8 +395,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 );
                 return;
             }
-            if gs.player_count() < 2 {
-                room.send_to_player(
+            if room.game_state.player_count() < 2 {
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
                         message: "Need at least 2 players to start".to_string(),
@@ -383,30 +406,30 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 return;
             }
 
-            gs.game_started = true;
+            room.game_state.game_started = true;
 
             // Freeze the starting chip amount for late entries.
-            gs.starting_chips = gs.starting_bbs * gs.big_blind;
+            room.game_state.starting_chips =
+                room.game_state.starting_bbs * room.game_state.big_blind;
 
             // Initialise the blind increase timer if configured.
-            if gs.blind_config.is_enabled() {
-                gs.last_blind_increase = Some(std::time::Instant::now());
+            if room.game_state.blind_config.is_enabled() {
+                room.game_state.last_blind_increase = Some(std::time::Instant::now());
             }
 
-            room.broadcast(&ServerMessage::GameStarted);
+            broadcast(&mut room.player_senders, &ServerMessage::GameStarted);
 
             // Start first hand.
-            let hand_msgs = gs.start_new_hand();
+            let hand_msgs = room.game_state.start_new_hand();
             for m in &hand_msgs {
-                room.broadcast(m);
+                broadcast(&mut room.player_senders, m);
             }
 
             // Send hole cards privately to each player.
-            send_hole_cards(&gs, &mut room);
+            send_hole_cards(&mut room);
 
             // Notify the current player it's their turn and start the timer.
-            let sitting_out = notify_turn_and_start_timer(&gs, &mut room, room_arc);
-            drop(gs);
+            let sitting_out = notify_turn_and_start_timer(&mut room, room_arc);
             drop(room);
             if let Some((pid, act)) = sitting_out {
                 process_action(pid, act, 0, room_arc).await;
@@ -432,9 +455,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
         ClientMessage::SitOut => {
             let mut room = room_arc.lock().await;
-            let gs_arc = Arc::clone(&room.game_state);
-            let mut gs = gs_arc.lock().await;
-            if gs
+            if room
+                .game_state
                 .players
                 .get(&player_id)
                 .map(|p| p.sitting_out)
@@ -442,15 +464,17 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             {
                 return; // already sitting out or unknown player
             }
-            gs.set_sitting_out(player_id);
-            room.broadcast(&ServerMessage::PlayerSatOut { player_id });
+            room.game_state.set_sitting_out(player_id);
+            broadcast(
+                &mut room.player_senders,
+                &ServerMessage::PlayerSatOut { player_id },
+            );
         }
 
         ClientMessage::SitIn => {
             let mut room = room_arc.lock().await;
-            let gs_arc = Arc::clone(&room.game_state);
-            let mut gs = gs_arc.lock().await;
-            if !gs
+            if !room
+                .game_state
                 .players
                 .get(&player_id)
                 .map(|p| p.sitting_out)
@@ -458,25 +482,29 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             {
                 return; // already sitting in or unknown player
             }
-            gs.set_sitting_in(player_id);
-            room.broadcast(&ServerMessage::PlayerSatIn { player_id });
+            room.game_state.set_sitting_in(player_id);
+            broadcast(
+                &mut room.player_senders,
+                &ServerMessage::PlayerSatIn { player_id },
+            );
 
             // If the game was paused waiting for players, check whether
             // we now have enough active players to start a new hand.
-            if gs.waiting_for_players {
-                let active_count = gs
+            if room.game_state.waiting_for_players {
+                let active_count = room
+                    .game_state
                     .player_order
                     .iter()
                     .filter(|id| {
-                        gs.players
+                        room.game_state
+                            .players
                             .get(id)
                             .map(|p| !p.sitting_out && p.chips > 0)
                             .unwrap_or(false)
                     })
                     .count();
                 if active_count >= 2 {
-                    let sitting_out = maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
-                    drop(gs);
+                    let sitting_out = maybe_start_new_hand(&mut room, room_arc).await;
                     drop(room);
                     if let Some((pid, act)) = sitting_out {
                         process_action(pid, act, 0, room_arc).await;
@@ -487,10 +515,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
         ClientMessage::ToggleLateEntry => {
             let mut room = room_arc.lock().await;
-            let gs_arc = Arc::clone(&room.game_state);
-            let mut gs = gs_arc.lock().await;
-            if gs.host_id != player_id {
-                room.send_to_player(
+            if room.game_state.host_id != player_id {
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
                         message: "Only the host can toggle late entry".to_string(),
@@ -498,10 +525,12 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 );
                 return;
             }
-            gs.allow_late_entry = !gs.allow_late_entry;
-            let allowed = gs.allow_late_entry;
-            drop(gs);
-            room.broadcast(&ServerMessage::LateEntryChanged { allowed });
+            room.game_state.allow_late_entry = !room.game_state.allow_late_entry;
+            let allowed = room.game_state.allow_late_entry;
+            broadcast(
+                &mut room.player_senders,
+                &ServerMessage::LateEntryChanged { allowed },
+            );
         }
     }
 }
@@ -517,12 +546,11 @@ async fn process_action(
     room_arc: &Arc<Mutex<Room>>,
 ) {
     let mut room = room_arc.lock().await;
-    let gs_arc = Arc::clone(&room.game_state);
-    let mut gs = gs_arc.lock().await;
 
     // ── Pre-checks ───────────────────────────────────────────────────
-    if !gs.game_started {
-        room.send_to_player(
+    if !room.game_state.game_started {
+        send_to_player(
+            &mut room.player_senders,
             player_id,
             &ServerMessage::Error {
                 message: "Game not started".to_string(),
@@ -531,8 +559,9 @@ async fn process_action(
         return;
     }
 
-    if gs.current_player_id() != Some(player_id) {
-        room.send_to_player(
+    if room.game_state.current_player_id() != Some(player_id) {
+        send_to_player(
+            &mut room.player_senders,
             player_id,
             &ServerMessage::Error {
                 message: "Not your turn".to_string(),
@@ -541,9 +570,10 @@ async fn process_action(
         return;
     }
 
-    let valid = gs.valid_actions(player_id);
+    let valid = room.game_state.valid_actions(player_id);
     if !valid.contains(&action) {
-        room.send_to_player(
+        send_to_player(
+            &mut room.player_senders,
             player_id,
             &ServerMessage::Error {
                 message: format!("Invalid action. Valid: {:?}", valid),
@@ -552,10 +582,11 @@ async fn process_action(
         return;
     }
 
-    let player = match gs.players.get(&player_id) {
+    let player = match room.game_state.players.get(&player_id) {
         Some(p) => p.clone(),
         None => {
-            room.send_to_player(
+            send_to_player(
+                &mut room.player_senders,
                 player_id,
                 &ServerMessage::Error {
                     message: "Player not found".to_string(),
@@ -565,19 +596,23 @@ async fn process_action(
         }
     };
 
-    let to_call = gs.current_bet.saturating_sub(player.current_bet);
+    let to_call = room
+        .game_state
+        .current_bet
+        .saturating_sub(player.current_bet);
     let mut action_amount: Option<u32> = None;
 
     // ── Apply the action ─────────────────────────────────────────────
     match action {
         PlayerAction::Fold => {
-            if let Some(p) = gs.players.get_mut(&player_id) {
+            if let Some(p) = room.game_state.players.get_mut(&player_id) {
                 p.status = PlayerStatus::Folded;
             }
         }
         PlayerAction::Check => {
             if to_call != 0 {
-                room.send_to_player(
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
                         message: "Cannot check, must call or raise".to_string(),
@@ -585,29 +620,34 @@ async fn process_action(
                 );
                 return;
             }
-            if gs.phase == GamePhase::PreFlop && gs.big_blind_option {
-                gs.big_blind_option = false;
-                gs.last_raiser_index = None;
+            if room.game_state.phase == GamePhase::PreFlop && room.game_state.big_blind_option {
+                room.game_state.big_blind_option = false;
+                room.game_state.last_raiser_index = None;
             }
         }
         PlayerAction::Call => {
             let call_amount = to_call.min(player.chips);
             {
-                let p = gs.players.get_mut(&player_id).unwrap();
+                let p = room.game_state.players.get_mut(&player_id).unwrap();
                 p.chips -= call_amount;
                 p.current_bet += call_amount;
                 if p.chips == 0 {
                     p.status = PlayerStatus::AllIn;
                 }
             }
-            gs.pot += call_amount;
-            *gs.pot_contributions.entry(player_id).or_insert(0) += call_amount;
+            room.game_state.pot += call_amount;
+            *room
+                .game_state
+                .pot_contributions
+                .entry(player_id)
+                .or_insert(0) += call_amount;
             action_amount = Some(call_amount);
         }
         PlayerAction::Raise => {
             let raise_total = to_call + amount;
             if raise_total > player.chips {
-                room.send_to_player(
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
                         message: format!(
@@ -618,11 +658,13 @@ async fn process_action(
                 );
                 return;
             }
-            if amount < gs.min_raise && raise_total < player.chips {
-                room.send_to_player(
+            let min_raise = room.game_state.min_raise;
+            if amount < min_raise && raise_total < player.chips {
+                send_to_player(
+                    &mut room.player_senders,
                     player_id,
                     &ServerMessage::Error {
-                        message: format!("Minimum raise is {}", gs.min_raise),
+                        message: format!("Minimum raise is {}", min_raise),
                     },
                 );
                 return;
@@ -630,7 +672,7 @@ async fn process_action(
 
             let new_bet;
             {
-                let p = gs.players.get_mut(&player_id).unwrap();
+                let p = room.game_state.players.get_mut(&player_id).unwrap();
                 p.chips -= raise_total;
                 p.current_bet += raise_total;
                 new_bet = p.current_bet;
@@ -638,102 +680,113 @@ async fn process_action(
                     p.status = PlayerStatus::AllIn;
                 }
             }
-            gs.pot += raise_total;
-            *gs.pot_contributions.entry(player_id).or_insert(0) += raise_total;
-            gs.current_bet = new_bet;
-            gs.min_raise = gs.big_blind;
-            gs.last_raiser_index = Some(gs.current_player_index);
-            gs.big_blind_option = false;
+            room.game_state.pot += raise_total;
+            *room
+                .game_state
+                .pot_contributions
+                .entry(player_id)
+                .or_insert(0) += raise_total;
+            room.game_state.current_bet = new_bet;
+            room.game_state.min_raise = room.game_state.big_blind;
+            room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
+            room.game_state.big_blind_option = false;
             action_amount = Some(raise_total);
         }
         PlayerAction::AllIn => {
             let all_in = player.chips;
             let new_bet;
             {
-                let p = gs.players.get_mut(&player_id).unwrap();
+                let p = room.game_state.players.get_mut(&player_id).unwrap();
                 p.chips = 0;
                 p.current_bet += all_in;
                 new_bet = p.current_bet;
                 p.status = PlayerStatus::AllIn;
             }
-            gs.pot += all_in;
-            *gs.pot_contributions.entry(player_id).or_insert(0) += all_in;
-            if new_bet > gs.current_bet {
-                gs.current_bet = new_bet;
-                gs.last_raiser_index = Some(gs.current_player_index);
+            room.game_state.pot += all_in;
+            *room
+                .game_state
+                .pot_contributions
+                .entry(player_id)
+                .or_insert(0) += all_in;
+            if new_bet > room.game_state.current_bet {
+                room.game_state.current_bet = new_bet;
+                room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
             }
             action_amount = Some(all_in);
         }
     }
 
     // ── Broadcast the action + pot update ────────────────────────────
-    room.broadcast(&ServerMessage::PlayerActed {
-        player_id,
-        action,
-        amount: action_amount,
-    });
-    room.broadcast(&ServerMessage::PotUpdate { pot: gs.pot });
+    broadcast(
+        &mut room.player_senders,
+        &ServerMessage::PlayerActed {
+            player_id,
+            action,
+            amount: action_amount,
+        },
+    );
+    let pot = room.game_state.pot;
+    broadcast(&mut room.player_senders, &ServerMessage::PotUpdate { pot });
 
-    gs.has_acted_this_round = true;
-    gs.next_player();
+    room.game_state.has_acted_this_round = true;
+    room.game_state.next_player();
 
     // ── Post-action: check hand / betting status ─────────────────────
     // Loop to process any sitting-out players synchronously rather than
     // spawning delayed tasks (which are susceptible to race conditions).
     loop {
-        if gs.active_player_count() == 1 {
-            let msgs = gs.resolve_hand();
+        if room.game_state.active_player_count() == 1 {
+            let msgs = room.game_state.resolve_hand();
             for m in &msgs {
-                room.broadcast(m);
+                broadcast(&mut room.player_senders, m);
             }
-            if let Some((pid, act)) = maybe_start_new_hand(&mut gs, &mut room, room_arc).await {
-                apply_sitting_out_action(&mut gs, &mut room, pid, act);
+            if let Some((pid, act)) = maybe_start_new_hand(&mut room, room_arc).await {
+                apply_sitting_out_action(&mut room, pid, act);
                 continue;
             }
             return;
         }
 
-        if gs.is_betting_complete() {
-            if gs.phase == GamePhase::River {
-                let msgs = gs.resolve_hand();
+        if room.game_state.is_betting_complete() {
+            if room.game_state.phase == GamePhase::River {
+                let msgs = room.game_state.resolve_hand();
                 for m in &msgs {
-                    room.broadcast(m);
+                    broadcast(&mut room.player_senders, m);
                 }
-                if let Some((pid, act)) = maybe_start_new_hand(&mut gs, &mut room, room_arc).await {
-                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                if let Some((pid, act)) = maybe_start_new_hand(&mut room, room_arc).await {
+                    apply_sitting_out_action(&mut room, pid, act);
                     continue;
                 }
                 return;
             } else {
                 // Advance to next phase.
-                let phase_msgs = gs.advance_phase();
+                let phase_msgs = room.game_state.advance_phase();
                 for m in &phase_msgs {
-                    room.broadcast(m);
+                    broadcast(&mut room.player_senders, m);
                 }
 
                 // If only all-in players remain, run it out.
-                if gs.actionable_players().is_empty() {
-                    broadcast_allin_showdown(&gs, &mut room);
+                if room.game_state.actionable_players().is_empty() {
+                    broadcast_allin_showdown(&mut room);
 
-                    // Release locks before the timed loop so we can
-                    // cleanly re-acquire them each iteration.
-                    drop(gs);
+                    // Release lock before the timed loop so we can
+                    // cleanly re-acquire it each iteration.
                     drop(room);
 
                     run_out_board(room_arc).await;
                     return;
                 }
 
-                if let Some((pid, act)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
-                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc) {
+                    apply_sitting_out_action(&mut room, pid, act);
                     continue;
                 }
                 return;
             }
         }
 
-        if let Some((pid, act)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
-            apply_sitting_out_action(&mut gs, &mut room, pid, act);
+        if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc) {
+            apply_sitting_out_action(&mut room, pid, act);
             continue;
         }
         return;
@@ -747,19 +800,20 @@ async fn process_action(
 /// Returns `Some((player_id, action))` if the first player of the new hand
 /// is sitting out, so the caller can process their auto-action synchronously.
 async fn maybe_start_new_hand(
-    gs: &mut GameState,
     room: &mut Room,
     room_arc: &Arc<Mutex<Room>>,
 ) -> Option<(u32, PlayerAction)> {
-    if !gs.game_started {
+    if !room.game_state.game_started {
         return None;
     }
 
-    let active_count = gs
+    let active_count = room
+        .game_state
         .player_order
         .iter()
         .filter(|id| {
-            gs.players
+            room.game_state
+                .players
                 .get(id)
                 .map(|p| !p.sitting_out && p.chips > 0)
                 .unwrap_or(false)
@@ -767,31 +821,34 @@ async fn maybe_start_new_hand(
         .count();
 
     if active_count >= 2 {
-        gs.waiting_for_players = false;
-        // Drop locks before sleeping would be ideal, but we hold mutable
-        // borrows here. Since actions are serialised through the room
-        // lock anyway, this should be acceptable.
+        room.game_state.waiting_for_players = false;
+        // Since actions are serialised through the room lock anyway,
+        // sleeping while holding it is acceptable.
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        let hand_msgs = gs.start_new_hand();
+        let hand_msgs = room.game_state.start_new_hand();
         for m in &hand_msgs {
-            room.broadcast(m);
+            broadcast(&mut room.player_senders, m);
         }
-        send_hole_cards(gs, room);
-        return notify_turn_and_start_timer(gs, room, room_arc);
+        send_hole_cards(room);
+        return notify_turn_and_start_timer(room, room_arc);
     } else {
-        gs.waiting_for_players = true;
-        room.broadcast(&ServerMessage::WaitingForPlayers);
+        room.game_state.waiting_for_players = true;
+        broadcast(&mut room.player_senders, &ServerMessage::WaitingForPlayers);
     }
 
     None
 }
 
 /// Send each player their private hole cards.
-fn send_hole_cards(gs: &GameState, room: &mut Room) {
-    for (&pid, player) in &gs.players {
+fn send_hole_cards(room: &mut Room) {
+    for (&pid, player) in &room.game_state.players {
         if let Some((c1, c2)) = player.hole_cards {
             let cards = [card_to_info(&c1), card_to_info(&c2)];
-            room.send_to_player(pid, &ServerMessage::HoleCards { cards });
+            send_to_player(
+                &mut room.player_senders,
+                pid,
+                &ServerMessage::HoleCards { cards },
+            );
         }
     }
 }
@@ -805,35 +862,29 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
         let mut room = room_arc.lock().await;
-        let gs_arc = Arc::clone(&room.game_state);
-        let mut gs = gs_arc.lock().await;
 
-        let phase_msgs = gs.advance_phase();
+        let phase_msgs = room.game_state.advance_phase();
         for m in &phase_msgs {
-            room.broadcast(m);
+            broadcast(&mut room.player_senders, m);
         }
 
-        if gs.phase == GamePhase::Showdown {
-            let msgs = gs.resolve_hand();
+        if room.game_state.phase == GamePhase::Showdown {
+            let msgs = room.game_state.resolve_hand();
             for m in &msgs {
-                room.broadcast(m);
+                broadcast(&mut room.player_senders, m);
             }
             // Handle the new hand inline (with a loop for sitting-out
             // players) to avoid process_action <-> run_out_board recursion.
-            if let Some((mut pid, mut act)) =
-                maybe_start_new_hand(&mut gs, &mut room, room_arc).await
-            {
+            if let Some((mut pid, mut act)) = maybe_start_new_hand(&mut room, room_arc).await {
                 loop {
-                    apply_sitting_out_action(&mut gs, &mut room, pid, act);
+                    apply_sitting_out_action(&mut room, pid, act);
 
-                    if gs.active_player_count() == 1 {
-                        let hand_msgs = gs.resolve_hand();
+                    if room.game_state.active_player_count() == 1 {
+                        let hand_msgs = room.game_state.resolve_hand();
                         for m in &hand_msgs {
-                            room.broadcast(m);
+                            broadcast(&mut room.player_senders, m);
                         }
-                        if let Some((np, na)) =
-                            maybe_start_new_hand(&mut gs, &mut room, room_arc).await
-                        {
+                        if let Some((np, na)) = maybe_start_new_hand(&mut room, room_arc).await {
                             pid = np;
                             act = na;
                             continue;
@@ -841,14 +892,13 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                         break;
                     }
 
-                    if gs.is_betting_complete() {
-                        if gs.phase == GamePhase::River {
-                            let hand_msgs = gs.resolve_hand();
+                    if room.game_state.is_betting_complete() {
+                        if room.game_state.phase == GamePhase::River {
+                            let hand_msgs = room.game_state.resolve_hand();
                             for m in &hand_msgs {
-                                room.broadcast(m);
+                                broadcast(&mut room.player_senders, m);
                             }
-                            if let Some((np, na)) =
-                                maybe_start_new_hand(&mut gs, &mut room, room_arc).await
+                            if let Some((np, na)) = maybe_start_new_hand(&mut room, room_arc).await
                             {
                                 pid = np;
                                 act = na;
@@ -856,19 +906,17 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                             }
                             break;
                         } else {
-                            let phase_msgs = gs.advance_phase();
+                            let phase_msgs = room.game_state.advance_phase();
                             for m in &phase_msgs {
-                                room.broadcast(m);
+                                broadcast(&mut room.player_senders, m);
                             }
-                            if gs.actionable_players().is_empty() {
-                                broadcast_allin_showdown(&gs, &mut room);
-                                drop(gs);
+                            if room.game_state.actionable_players().is_empty() {
+                                broadcast_allin_showdown(&mut room);
                                 drop(room);
                                 // Re-enter run_out_board (no process_action recursion).
                                 return Box::pin(run_out_board(room_arc)).await;
                             }
-                            if let Some((np, na)) =
-                                notify_turn_and_start_timer(&gs, &mut room, room_arc)
+                            if let Some((np, na)) = notify_turn_and_start_timer(&mut room, room_arc)
                             {
                                 pid = np;
                                 act = na;
@@ -878,7 +926,7 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                         }
                     }
 
-                    if let Some((np, na)) = notify_turn_and_start_timer(&gs, &mut room, room_arc) {
+                    if let Some((np, na)) = notify_turn_and_start_timer(&mut room, room_arc) {
                         pid = np;
                         act = na;
                         continue;
@@ -892,25 +940,24 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
 }
 
 /// Notify the player whose turn it is.
-fn send_turn_notification(gs: &GameState, room: &mut Room) {
-    if let Some(current_id) = gs.current_player_id() {
-        let your_bet = gs
+fn send_turn_notification(room: &mut Room) {
+    if let Some(current_id) = room.game_state.current_player_id() {
+        let your_bet = room
+            .game_state
             .players
             .get(&current_id)
             .map(|p| p.current_bet)
             .unwrap_or(0);
-        let valid_actions = gs.valid_actions(current_id);
+        let valid_actions = room.game_state.valid_actions(current_id);
 
-        room.send_to_player(
-            current_id,
-            &ServerMessage::YourTurn {
-                current_bet: gs.current_bet,
-                your_bet,
-                pot: gs.pot,
-                min_raise: gs.min_raise,
-                valid_actions,
-            },
-        );
+        let msg = ServerMessage::YourTurn {
+            current_bet: room.game_state.current_bet,
+            your_bet,
+            pot: room.game_state.pot,
+            min_raise: room.game_state.min_raise,
+            valid_actions,
+        };
+        send_to_player(&mut room.player_senders, current_id, &msg);
     }
 }
 
@@ -918,22 +965,17 @@ fn send_turn_notification(gs: &GameState, room: &mut Room) {
 ///
 /// This is used by the post-action loop to process consecutive sitting-out
 /// players synchronously without dropping and re-acquiring locks.
-fn apply_sitting_out_action(
-    gs: &mut GameState,
-    room: &mut Room,
-    player_id: u32,
-    action: PlayerAction,
-) {
+fn apply_sitting_out_action(room: &mut Room, player_id: u32, action: PlayerAction) {
     match action {
         PlayerAction::Fold => {
-            if let Some(p) = gs.players.get_mut(&player_id) {
+            if let Some(p) = room.game_state.players.get_mut(&player_id) {
                 p.status = PlayerStatus::Folded;
             }
         }
         PlayerAction::Check => {
-            if gs.phase == GamePhase::PreFlop && gs.big_blind_option {
-                gs.big_blind_option = false;
-                gs.last_raiser_index = None;
+            if room.game_state.phase == GamePhase::PreFlop && room.game_state.big_blind_option {
+                room.game_state.big_blind_option = false;
+                room.game_state.last_raiser_index = None;
             }
         }
         _ => {
@@ -942,15 +984,19 @@ fn apply_sitting_out_action(
         }
     }
 
-    room.broadcast(&ServerMessage::PlayerActed {
-        player_id,
-        action,
-        amount: None,
-    });
-    room.broadcast(&ServerMessage::PotUpdate { pot: gs.pot });
+    broadcast(
+        &mut room.player_senders,
+        &ServerMessage::PlayerActed {
+            player_id,
+            action,
+            amount: None,
+        },
+    );
+    let pot = room.game_state.pot;
+    broadcast(&mut room.player_senders, &ServerMessage::PotUpdate { pot });
 
-    gs.has_acted_this_round = true;
-    gs.next_player();
+    room.game_state.has_acted_this_round = true;
+    room.game_state.next_player();
 }
 
 /// Send the turn notification **and** start a 30-second turn timer.
@@ -963,22 +1009,21 @@ fn apply_sitting_out_action(
 /// synchronously as `Some((player_id, action))` so the caller can
 /// process it immediately without spawning a delayed task.
 fn notify_turn_and_start_timer(
-    gs: &GameState,
     room: &mut Room,
     room_arc: &Arc<Mutex<Room>>,
 ) -> Option<(u32, PlayerAction)> {
     // Send the private YourTurn message to the current player.
-    send_turn_notification(gs, room);
+    send_turn_notification(room);
 
-    let current_id = gs.current_player_id()?;
+    let current_id = room.game_state.current_player_id()?;
 
     // Increment the turn counter to invalidate any stale timer tasks.
     let turn = room.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
-    if gs.is_current_player_sitting_out() {
+    if room.game_state.is_current_player_sitting_out() {
         // Sitting-out player: return the auto-action for the caller to
         // process synchronously, avoiding a spawned task race condition.
-        let valid = gs.valid_actions(current_id);
+        let valid = room.game_state.valid_actions(current_id);
         let action = if valid.contains(&PlayerAction::Check) {
             PlayerAction::Check
         } else {
@@ -993,16 +1038,19 @@ fn notify_turn_and_start_timer(
     }
 
     // Broadcast the timer start to all players so UIs can show a countdown.
-    room.broadcast(&ServerMessage::TurnTimerStarted {
-        player_id: current_id,
-        timeout_secs: TURN_TIMEOUT_SECS,
-    });
+    broadcast(
+        &mut room.player_senders,
+        &ServerMessage::TurnTimerStarted {
+            player_id: current_id,
+            timeout_secs: TURN_TIMEOUT_SECS,
+        },
+    );
 
     // Spawn a background task that will force an action after the timeout.
     let counter = Arc::clone(&room.turn_counter);
     let room_arc_clone = Arc::clone(room_arc);
     tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(TURN_TIMEOUT_SECS as u64)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(TURN_TIMEOUT_SECS.into())).await;
         // Only act if the turn counter still matches (i.e. no one has acted
         // or started a new turn since we spawned).
         if counter.load(Ordering::SeqCst) == turn {
@@ -1021,16 +1069,14 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
     // Quick pre-check under the lock to confirm the turn is still valid.
     {
         let room = room_arc.lock().await;
-        let gs_arc = Arc::clone(&room.game_state);
-        let gs = gs_arc.lock().await;
 
         if room.turn_counter.load(Ordering::SeqCst) != expected_turn {
             return;
         }
-        if !gs.game_started {
+        if !room.game_state.game_started {
             return;
         }
-        if gs.current_player_id() != Some(player_id) {
+        if room.game_state.current_player_id() != Some(player_id) {
             return;
         }
     }
@@ -1038,9 +1084,7 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
     // Determine the forced action (check if valid, otherwise fold).
     let action = {
         let room = room_arc.lock().await;
-        let gs_arc = Arc::clone(&room.game_state);
-        let gs = gs_arc.lock().await;
-        let valid = gs.valid_actions(player_id);
+        let valid = room.game_state.valid_actions(player_id);
         if valid.contains(&PlayerAction::Check) {
             PlayerAction::Check
         } else {
@@ -1051,17 +1095,18 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
     // If forced to fold, automatically sit the player out.
     if action == PlayerAction::Fold {
         let mut room = room_arc.lock().await;
-        let gs_arc = Arc::clone(&room.game_state);
-        let mut gs = gs_arc.lock().await;
-        if !gs
+        if !room
+            .game_state
             .players
             .get(&player_id)
             .map(|p| p.sitting_out)
             .unwrap_or(true)
         {
-            gs.set_sitting_out(player_id);
-            drop(gs);
-            room.broadcast(&ServerMessage::PlayerSatOut { player_id });
+            room.game_state.set_sitting_out(player_id);
+            broadcast(
+                &mut room.player_senders,
+                &ServerMessage::PlayerSatOut { player_id },
+            );
             tracing::info!(player = player_id, "Auto sitting out after timeout fold");
         }
     }
@@ -1077,11 +1122,11 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
 }
 
 /// Broadcast an all-in showdown with equity percentages.
-fn broadcast_allin_showdown(gs: &GameState, room: &mut Room) {
+fn broadcast_allin_showdown(room: &mut Room) {
     let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
 
-    for &id in &gs.player_order {
-        if let Some(player) = gs.players.get(&id)
+    for &id in &room.game_state.player_order {
+        if let Some(player) = room.game_state.players.get(&id)
             && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
             && let Some((c1, c2)) = player.hole_cards
         {
@@ -1094,7 +1139,7 @@ fn broadcast_allin_showdown(gs: &GameState, room: &mut Room) {
         return;
     }
 
-    let board = gs.build_board();
+    let board = room.game_state.build_board();
     let hands_for_calc: Vec<Hand> = player_hands
         .iter()
         .map(|(_, _, h)| Hand(h.0, h.1))
@@ -1107,10 +1152,18 @@ fn broadcast_allin_showdown(gs: &GameState, room: &mut Room) {
         .map(|(i, (id, cards, _))| (*id, *cards, equities.get(i).copied().unwrap_or(0.0)))
         .collect();
 
-    let community_cards: Vec<CardInfo> = gs.community_cards.iter().map(card_to_info).collect();
+    let community_cards: Vec<CardInfo> = room
+        .game_state
+        .community_cards
+        .iter()
+        .map(card_to_info)
+        .collect();
 
-    room.broadcast(&ServerMessage::AllInShowdown {
-        hands: hands_with_equity,
-        community_cards,
-    });
+    broadcast(
+        &mut room.player_senders,
+        &ServerMessage::AllInShowdown {
+            hands: hands_with_equity,
+            community_cards,
+        },
+    );
 }

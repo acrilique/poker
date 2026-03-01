@@ -570,7 +570,7 @@ impl GameState {
             // How many players contributed at least `level` chips total?
             let contributors: usize = contributions.iter().filter(|(_, a)| *a >= level).count();
 
-            let pot_amount = layer * contributors as u32;
+            let pot_amount = layer * u32::try_from(contributors).unwrap();
 
             // Only non-folded players who contributed at least `level` are
             // eligible to *win* this sub-pot.
@@ -713,12 +713,12 @@ impl GameState {
                     continue;
                 }
 
-                let num_winners = pot_winners.len() as u32;
+                let num_winners = u32::try_from(pot_winners.len()).unwrap();
                 let share = pot_amount / num_winners;
                 let remainder = pot_amount % num_winners;
                 for (i, id) in pot_winners.iter().enumerate() {
                     let entry = winnings.entry(*id).or_insert((0, rank.clone()));
-                    entry.0 += share + if (i as u32) < remainder { 1 } else { 0 };
+                    entry.0 += share + if u32::try_from(i).unwrap() < remainder { 1 } else { 0 };
                 }
             }
         }
