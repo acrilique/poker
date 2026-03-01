@@ -355,10 +355,7 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 message.to_string()
             };
             let mut room = room_arc.lock().await;
-            let chat = ServerMessage::ChatMessage {
-                player_id,
-                message,
-            };
+            let chat = ServerMessage::ChatMessage { player_id, message };
             room.broadcast(&chat);
         }
 
@@ -494,9 +491,7 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             gs.allow_late_entry = !gs.allow_late_entry;
             let allowed = gs.allow_late_entry;
             drop(gs);
-            room.broadcast(&ServerMessage::LateEntryChanged {
-                allowed,
-            });
+            room.broadcast(&ServerMessage::LateEntryChanged { allowed });
         }
     }
 }

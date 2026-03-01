@@ -81,7 +81,10 @@ impl Room {
     pub fn send_to_player(&mut self, player_id: u32, msg: &ServerMessage) {
         if let Some(tx) = self.player_senders.get(&player_id) {
             if tx.try_send(msg.clone()).is_err() {
-                tracing::warn!(player = player_id, "Channel full or closed — dropping sender");
+                tracing::warn!(
+                    player = player_id,
+                    "Channel full or closed — dropping sender"
+                );
                 self.player_senders.remove(&player_id);
             }
         }
@@ -277,7 +280,10 @@ impl RoomManager {
         let (player_id, player_count) = {
             let mut game_state = room.game_state.lock().await;
             if game_state.player_count() >= MAX_PLAYERS_PER_ROOM {
-                return Err(format!("Room is full (max {} players)", MAX_PLAYERS_PER_ROOM));
+                return Err(format!(
+                    "Room is full (max {} players)",
+                    MAX_PLAYERS_PER_ROOM
+                ));
             }
             if game_state.game_started && !game_state.allow_late_entry {
                 return Err("Game already in progress".to_string());
