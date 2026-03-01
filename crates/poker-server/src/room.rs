@@ -28,7 +28,7 @@ const MAX_PLAYERS_PER_ROOM: usize = 9;
 
 /// Maximum number of outbound messages buffered per player before the
 /// connection is considered too slow and the sender is dropped.
-const PLAYER_CHANNEL_CAPACITY: usize = 64;
+const PLAYER_CHANNEL_CAPACITY: usize = 128;
 
 /// Handle to a per-player outbound channel.
 ///
