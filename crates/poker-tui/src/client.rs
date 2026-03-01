@@ -95,10 +95,7 @@ pub async fn start_client(
 // Event loop
 // ---------------------------------------------------------------------------
 
-async fn run_event_loop(
-    tui: &mut Tui,
-    ctrl: &mut ClientController,
-) -> Result<(), ClientError> {
+async fn run_event_loop(tui: &mut Tui, ctrl: &mut ClientController) -> Result<(), ClientError> {
     loop {
         tui.render(&ctrl.state)?;
 

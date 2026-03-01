@@ -10,9 +10,9 @@
 
 use tokio::sync::mpsc;
 
+use crate::transport::TransportError;
 #[cfg(feature = "native")]
 use crate::transport::{Transport, TransportReader, TransportWriter};
-use crate::transport::TransportError;
 use poker_core::protocol::{ClientMessage, ServerMessage};
 
 // ---------------------------------------------------------------------------

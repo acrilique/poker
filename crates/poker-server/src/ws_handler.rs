@@ -67,7 +67,13 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             send_one(&ws_sink, &ok).await;
                         }
                         Err(e) => {
-                            send_one(&ws_sink, &ServerMessage::RoomError { message: e.to_string() }).await;
+                            send_one(
+                                &ws_sink,
+                                &ServerMessage::RoomError {
+                                    message: e.to_string(),
+                                },
+                            )
+                            .await;
                         }
                     },
                     ClientMessage::JoinRoom {
@@ -215,7 +221,13 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             break; // → enter the game loop
                         }
                         Err(e) => {
-                            send_one(&ws_sink, &ServerMessage::RoomError { message: e.to_string() }).await;
+                            send_one(
+                                &ws_sink,
+                                &ServerMessage::RoomError {
+                                    message: e.to_string(),
+                                },
+                            )
+                            .await;
                         }
                     },
                     ClientMessage::Rejoin {
@@ -237,7 +249,13 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             break; // → enter the game loop
                         }
                         Err(e) => {
-                            send_one(&ws_sink, &ServerMessage::RoomError { message: e.to_string() }).await;
+                            send_one(
+                                &ws_sink,
+                                &ServerMessage::RoomError {
+                                    message: e.to_string(),
+                                },
+                            )
+                            .await;
                         }
                     },
                     ClientMessage::Ping => {
