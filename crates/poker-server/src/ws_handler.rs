@@ -376,11 +376,7 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
         ClientMessage::Chat { message } => {
             const MAX_CHAT_LEN: usize = 256;
-            let message = if message.len() > MAX_CHAT_LEN {
-                message[..MAX_CHAT_LEN].to_string()
-            } else {
-                message.to_string()
-            };
+            let message: String = message.chars().take(MAX_CHAT_LEN).collect();
             let mut room = room_arc.lock().await;
             let chat = ServerMessage::ChatMessage { player_id, message };
             broadcast(&mut room.player_senders, &chat);
@@ -412,7 +408,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
             room.game_state.game_started = true;
 
-            // Freeze the starting chip amount for late entries.
+            // Freeze the starting chip amount and big blind for late entries.
+            room.game_state.starting_big_blind = room.game_state.big_blind;
             room.game_state.starting_chips =
                 room.game_state.starting_bbs * room.game_state.big_blind;
 

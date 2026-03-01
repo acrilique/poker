@@ -106,6 +106,9 @@ pub struct GameState {
     pub host_id: u32,
     /// Starting chip count, frozen at game start for late entries.
     pub starting_chips: u32,
+    /// Initial big blind value, frozen at game start so that
+    /// `starting_bbs * starting_big_blind` always equals the original buy-in.
+    pub starting_big_blind: u32,
     /// True when the game is paused because fewer than 2 players are active
     /// (not sitting out). Cleared when a player sits back in and triggers
     /// a new hand.
@@ -143,6 +146,7 @@ impl Default for GameState {
             allow_late_entry: false,
             host_id: 0,
             starting_chips: 0,
+            starting_big_blind: 0,
             waiting_for_players: false,
             pot_contributions: HashMap::new(),
         }
@@ -160,7 +164,8 @@ impl GameState {
 
     /// Add a player with an optional chip override (used for late entries).
     pub fn add_player_with_chips(&mut self, name: String, chips_override: Option<u32>) -> Player {
-        let starting_chips = chips_override.unwrap_or(self.starting_bbs * self.big_blind);
+        let bb = if self.starting_big_blind > 0 { self.starting_big_blind } else { self.big_blind };
+        let starting_chips = chips_override.unwrap_or(self.starting_bbs * bb);
         let player = Player {
             id: self.next_player_id,
             name,
