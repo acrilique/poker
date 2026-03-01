@@ -79,14 +79,14 @@ impl Room {
     /// player's sender is dropped, which will cause the write task to
     /// terminate and trigger a disconnect.
     pub fn send_to_player(&mut self, player_id: u32, msg: &ServerMessage) {
-        if let Some(tx) = self.player_senders.get(&player_id) {
-            if tx.try_send(msg.clone()).is_err() {
-                tracing::warn!(
-                    player = player_id,
-                    "Channel full or closed — dropping sender"
-                );
-                self.player_senders.remove(&player_id);
-            }
+        if let Some(tx) = self.player_senders.get(&player_id)
+            && tx.try_send(msg.clone()).is_err()
+        {
+            tracing::warn!(
+                player = player_id,
+                "Channel full or closed — dropping sender"
+            );
+            self.player_senders.remove(&player_id);
         }
     }
 
