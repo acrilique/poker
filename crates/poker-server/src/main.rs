@@ -23,7 +23,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
@@ -59,10 +59,26 @@ async fn main() {
     let main_site = ServeDir::new(&static_dir)
         .not_found_service(ServeFile::new(format!("{static_dir}/index.html")));
 
+    // CORS: restrict to specific origins in production via CORS_ORIGIN env var
+    // Falls back to permissive for local development.
+    let cors = match std::env::var("CORS_ORIGIN") {
+        Ok(origins) => {
+            let allowed: Vec<_> = origins
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(allowed))
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any)
+        }
+        Err(_) => CorsLayer::permissive(),
+    };
+
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/api/rooms", get(rooms_handler))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state)
         .nest_service("/poker", poker_spa)
         .fallback_service(main_site);
