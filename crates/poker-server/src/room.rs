@@ -18,12 +18,17 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 /// How long a disconnected player's seat is held before permanent removal.
 const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
+/// Maximum number of outbound messages buffered per player before the
+/// connection is considered too slow and the sender is dropped.
+const PLAYER_CHANNEL_CAPACITY: usize = 64;
+
 /// Handle to a per-player outbound channel.
 ///
 /// The WebSocket write loop drains this receiver and forwards messages as
-/// text frames.
-pub type PlayerTx = mpsc::UnboundedSender<ServerMessage>;
-pub type PlayerRx = mpsc::UnboundedReceiver<ServerMessage>;
+/// text frames.  The channel is **bounded** so that a slow or malicious
+/// client cannot cause unbounded memory growth on the server.
+pub type PlayerTx = mpsc::Sender<ServerMessage>;
+pub type PlayerRx = mpsc::Receiver<ServerMessage>;
 
 /// A single poker room.
 pub struct Room {
@@ -61,27 +66,46 @@ impl Room {
     }
 
     /// Send a message to a specific player.
-    pub fn send_to_player(&self, player_id: u32, msg: &ServerMessage) {
+    ///
+    /// Uses `try_send` to avoid blocking.  If the channel is full the
+    /// player's sender is dropped, which will cause the write task to
+    /// terminate and trigger a disconnect.
+    pub fn send_to_player(&mut self, player_id: u32, msg: &ServerMessage) {
         if let Some(tx) = self.player_senders.get(&player_id) {
-            // Ignore send failure — the player may have just disconnected.
-            let _ = tx.send(msg.clone());
+            if tx.try_send(msg.clone()).is_err() {
+                tracing::warn!(player = player_id, "Channel full or closed — dropping sender");
+                self.player_senders.remove(&player_id);
+            }
         }
     }
 
     /// Broadcast a message to **all** connected players in this room.
-    pub fn broadcast(&self, msg: &ServerMessage) {
-        for tx in self.player_senders.values() {
-            let _ = tx.send(msg.clone());
-        }
+    ///
+    /// Senders whose channels are full are removed (see [`send_to_player`]).
+    pub fn broadcast(&mut self, msg: &ServerMessage) {
+        self.player_senders.retain(|&pid, tx| {
+            if tx.try_send(msg.clone()).is_err() {
+                tracing::warn!(player = pid, "Channel full or closed — dropping sender");
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Broadcast a message to all connected players **except** `exclude_id`.
-    pub fn broadcast_except(&self, msg: &ServerMessage, exclude_id: u32) {
-        for (&pid, tx) in &self.player_senders {
-            if pid != exclude_id {
-                let _ = tx.send(msg.clone());
+    pub fn broadcast_except(&mut self, msg: &ServerMessage, exclude_id: u32) {
+        self.player_senders.retain(|&pid, tx| {
+            if pid == exclude_id {
+                return true; // keep but skip
             }
-        }
+            if tx.try_send(msg.clone()).is_err() {
+                tracing::warn!(player = pid, "Channel full or closed — dropping sender");
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Register a session token for a player.
@@ -267,7 +291,7 @@ impl RoomManager {
         let session_token = generate_session_token();
         room.register_session(player_id, session_token.clone());
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(PLAYER_CHANNEL_CAPACITY);
         room.player_senders.insert(player_id, tx);
 
         // Notify existing players about the new player.
@@ -318,7 +342,7 @@ impl RoomManager {
         room.disconnected_at.remove(&player_id);
 
         // Replace the sender channel.
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(PLAYER_CHANNEL_CAPACITY);
         room.player_senders.insert(player_id, tx);
 
         drop(room);
@@ -337,7 +361,8 @@ impl RoomManager {
         room.player_senders.remove(&player_id);
 
         let game_in_progress = {
-            let mut gs = room.game_state.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let mut gs = gs_arc.lock().await;
             if gs.game_started && gs.players.contains_key(&player_id) {
                 // Sit the player out so auto-check/fold kicks in.
                 if !gs

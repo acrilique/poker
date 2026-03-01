@@ -316,7 +316,7 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         | ClientMessage::CreateRoom { .. }
         | ClientMessage::JoinRoom { .. }
         | ClientMessage::Rejoin { .. } => {
-            let room = room_arc.lock().await;
+            let mut room = room_arc.lock().await;
             room.send_to_player(
                 player_id,
                 &ServerMessage::Error {
@@ -326,13 +326,14 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         }
 
         ClientMessage::Ping => {
-            let room = room_arc.lock().await;
+            let mut room = room_arc.lock().await;
             room.send_to_player(player_id, &ServerMessage::Pong);
         }
 
         ClientMessage::GetPlayers => {
-            let room = room_arc.lock().await;
-            let gs = room.game_state.lock().await;
+            let mut room = room_arc.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let gs = gs_arc.lock().await;
             let players = gs
                 .players
                 .values()
@@ -342,11 +343,12 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     chips: p.chips,
                 })
                 .collect();
+            drop(gs);
             room.send_to_player(player_id, &ServerMessage::PlayerList { players });
         }
 
         ClientMessage::Chat { message } => {
-            let room = room_arc.lock().await;
+            let mut room = room_arc.lock().await;
             let chat = ServerMessage::ChatMessage {
                 player_id,
                 message: message.clone(),
@@ -355,8 +357,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         }
 
         ClientMessage::StartGame => {
-            let room = room_arc.lock().await;
-            let mut gs = room.game_state.lock().await;
+            let mut room = room_arc.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let mut gs = gs_arc.lock().await;
 
             if gs.game_started {
                 room.send_to_player(
@@ -396,10 +399,10 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             }
 
             // Send hole cards privately to each player.
-            send_hole_cards(&gs, &room);
+            send_hole_cards(&gs, &mut room);
 
             // Notify the current player it's their turn and start the timer.
-            notify_turn_and_start_timer(&gs, &room, room_arc);
+            notify_turn_and_start_timer(&gs, &mut room, room_arc);
         }
 
         // ── Betting actions ─────────────────────────────────────────
@@ -420,8 +423,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         }
 
         ClientMessage::SitOut => {
-            let room = room_arc.lock().await;
-            let mut gs = room.game_state.lock().await;
+            let mut room = room_arc.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let mut gs = gs_arc.lock().await;
             if gs
                 .players
                 .get(&player_id)
@@ -435,8 +439,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
         }
 
         ClientMessage::SitIn => {
-            let room = room_arc.lock().await;
-            let mut gs = room.game_state.lock().await;
+            let mut room = room_arc.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let mut gs = gs_arc.lock().await;
             if !gs
                 .players
                 .get(&player_id)
@@ -462,14 +467,15 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     })
                     .count();
                 if active_count >= 2 {
-                    maybe_start_new_hand(&mut gs, &room, room_arc).await;
+                    maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
                 }
             }
         }
 
         ClientMessage::ToggleLateEntry => {
-            let room = room_arc.lock().await;
-            let mut gs = room.game_state.lock().await;
+            let mut room = room_arc.lock().await;
+            let gs_arc = Arc::clone(&room.game_state);
+            let mut gs = gs_arc.lock().await;
             if gs.host_id != player_id {
                 room.send_to_player(
                     player_id,
@@ -480,8 +486,10 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 return;
             }
             gs.allow_late_entry = !gs.allow_late_entry;
+            let allowed = gs.allow_late_entry;
+            drop(gs);
             room.broadcast(&ServerMessage::LateEntryChanged {
-                allowed: gs.allow_late_entry,
+                allowed,
             });
         }
     }
@@ -497,8 +505,9 @@ async fn process_action(
     amount: u32,
     room_arc: &Arc<Mutex<Room>>,
 ) {
-    let room = room_arc.lock().await;
-    let mut gs = room.game_state.lock().await;
+    let mut room = room_arc.lock().await;
+    let gs_arc = Arc::clone(&room.game_state);
+    let mut gs = gs_arc.lock().await;
 
     // ── Pre-checks ───────────────────────────────────────────────────
     if !gs.game_started {
@@ -660,7 +669,7 @@ async fn process_action(
         for m in &msgs {
             room.broadcast(m);
         }
-        maybe_start_new_hand(&mut gs, &room, room_arc).await;
+        maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
         return;
     }
 
@@ -670,7 +679,7 @@ async fn process_action(
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &room, room_arc).await;
+            maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
         } else {
             // Advance to next phase.
             let phase_msgs = gs.advance_phase();
@@ -680,7 +689,7 @@ async fn process_action(
 
             // If only all-in players remain, run it out.
             if gs.actionable_players().is_empty() {
-                broadcast_allin_showdown(&gs, &room);
+                broadcast_allin_showdown(&gs, &mut room);
 
                 // Release locks before the timed loop so we can
                 // cleanly re-acquire them each iteration.
@@ -689,18 +698,18 @@ async fn process_action(
 
                 run_out_board(room_arc).await;
             } else {
-                notify_turn_and_start_timer(&gs, &room, room_arc);
+                notify_turn_and_start_timer(&gs, &mut room, room_arc);
             }
         }
     } else {
-        notify_turn_and_start_timer(&gs, &room, room_arc);
+        notify_turn_and_start_timer(&gs, &mut room, room_arc);
     }
 }
 
 /// If the game is still running with ≥ 2 active (not sitting-out) players,
 /// start the next hand after a short delay. Otherwise pause and wait for
 /// players to sit back in.
-async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
+async fn maybe_start_new_hand(gs: &mut GameState, room: &mut Room, room_arc: &Arc<Mutex<Room>>) {
     if !gs.game_started {
         return;
     }
@@ -735,7 +744,7 @@ async fn maybe_start_new_hand(gs: &mut GameState, room: &Room, room_arc: &Arc<Mu
 }
 
 /// Send each player their private hole cards.
-fn send_hole_cards(gs: &GameState, room: &Room) {
+fn send_hole_cards(gs: &GameState, room: &mut Room) {
     for (&pid, player) in &gs.players {
         if let Some((c1, c2)) = player.hole_cards {
             let cards = [card_to_info(&c1), card_to_info(&c2)];
@@ -752,8 +761,9 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
-        let room = room_arc.lock().await;
-        let mut gs = room.game_state.lock().await;
+        let mut room = room_arc.lock().await;
+        let gs_arc = Arc::clone(&room.game_state);
+        let mut gs = gs_arc.lock().await;
 
         let phase_msgs = gs.advance_phase();
         for m in &phase_msgs {
@@ -765,14 +775,14 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
             for m in &msgs {
                 room.broadcast(m);
             }
-            maybe_start_new_hand(&mut gs, &room, room_arc).await;
+            maybe_start_new_hand(&mut gs, &mut room, room_arc).await;
             return;
         }
     }
 }
 
 /// Notify the player whose turn it is.
-fn send_turn_notification(gs: &GameState, room: &Room) {
+fn send_turn_notification(gs: &GameState, room: &mut Room) {
     if let Some(current_id) = gs.current_player_id() {
         let your_bet = gs
             .players
@@ -802,7 +812,7 @@ fn send_turn_notification(gs: &GameState, room: &Room) {
 ///
 /// If the current player is sitting out, their action is resolved
 /// immediately (auto-check or auto-fold) instead of waiting for input.
-fn notify_turn_and_start_timer(gs: &GameState, room: &Room, room_arc: &Arc<Mutex<Room>>) {
+fn notify_turn_and_start_timer(gs: &GameState, room: &mut Room, room_arc: &Arc<Mutex<Room>>) {
     // Send the private YourTurn message to the current player.
     send_turn_notification(gs, room);
 
@@ -862,7 +872,8 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
     // Quick pre-check under the lock to confirm the turn is still valid.
     {
         let room = room_arc.lock().await;
-        let gs = room.game_state.lock().await;
+        let gs_arc = Arc::clone(&room.game_state);
+        let gs = gs_arc.lock().await;
 
         if room.turn_counter.load(Ordering::SeqCst) != expected_turn {
             return;
@@ -878,7 +889,8 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
     // Determine the forced action (check if valid, otherwise fold).
     let action = {
         let room = room_arc.lock().await;
-        let gs = room.game_state.lock().await;
+        let gs_arc = Arc::clone(&room.game_state);
+        let gs = gs_arc.lock().await;
         let valid = gs.valid_actions(player_id);
         if valid.contains(&PlayerAction::Check) {
             PlayerAction::Check
@@ -889,8 +901,9 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
 
     // If forced to fold, automatically sit the player out.
     if action == PlayerAction::Fold {
-        let room = room_arc.lock().await;
-        let mut gs = room.game_state.lock().await;
+        let mut room = room_arc.lock().await;
+        let gs_arc = Arc::clone(&room.game_state);
+        let mut gs = gs_arc.lock().await;
         if !gs
             .players
             .get(&player_id)
@@ -898,6 +911,7 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
             .unwrap_or(true)
         {
             gs.set_sitting_out(player_id);
+            drop(gs);
             room.broadcast(&ServerMessage::PlayerSatOut { player_id });
             tracing::info!(player = player_id, "Auto sitting out after timeout fold");
         }
@@ -914,7 +928,7 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
 }
 
 /// Broadcast an all-in showdown with equity percentages.
-fn broadcast_allin_showdown(gs: &GameState, room: &Room) {
+fn broadcast_allin_showdown(gs: &GameState, room: &mut Room) {
     let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
 
     for &id in &gs.player_order {
