@@ -218,13 +218,13 @@ impl Room {
 /// rooms) while writes (create / remove) take exclusive access.  Each room
 /// is individually `Mutex`-protected so independent rooms never contend.
 pub struct RoomManager {
-    rooms: RwLock<HashMap<String, Arc<Mutex<Room>>>>,
+    rooms: Arc<RwLock<HashMap<String, Arc<Mutex<Room>>>>>,
 }
 
 impl RoomManager {
     pub fn new() -> Self {
         Self {
-            rooms: RwLock::new(HashMap::new()),
+            rooms: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -406,6 +406,7 @@ impl RoomManager {
             let rm = self_ref(room_id, &self.rooms).await;
             let rid = room_id.to_string();
             let grace = SESSION_GRACE_PERIOD;
+            let rooms_ref = Arc::clone(&self.rooms);
             drop(room);
             drop(rooms);
 
@@ -433,6 +434,21 @@ impl RoomManager {
                             player = player_id,
                             "Grace period expired — player permanently removed"
                         );
+
+                        // If no connected players remain, remove the room
+                        // entirely so it doesn't leak memory.
+                        if room.player_senders.is_empty() {
+                            drop(room);
+                            let mut rooms = rooms_ref.write().await;
+                            if let Some(room_arc) = rooms.get(&rid) {
+                                let r = room_arc.lock().await;
+                                if r.player_senders.is_empty() {
+                                    drop(r);
+                                    rooms.remove(&rid);
+                                    tracing::info!(room = %rid, "Removed empty room after grace period");
+                                }
+                            }
+                        }
                     }
                 });
             }
