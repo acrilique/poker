@@ -26,6 +26,13 @@ const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
 /// panic in `start_new_hand`.
 const MAX_PLAYERS_PER_ROOM: usize = 9;
 
+/// Maximum number of rooms that can exist at the same time.
+///
+/// Without this, a malicious client could loop `CreateRoom` and exhaust
+/// server memory.  The value is generous for legitimate use while still
+/// bounding resource consumption.
+const MAX_ACTIVE_ROOMS: usize = 100;
+
 /// Maximum number of outbound messages buffered per player before the
 /// connection is considered too slow and the sender is dropped.
 const PLAYER_CHANNEL_CAPACITY: usize = 128;
@@ -249,6 +256,11 @@ impl RoomManager {
         validate_room_id(room_id)?;
 
         let mut rooms = self.rooms.write().await;
+        if rooms.len() >= MAX_ACTIVE_ROOMS {
+            return Err(format!(
+                "Server room limit reached (max {MAX_ACTIVE_ROOMS}). Try again later."
+            ));
+        }
         if rooms.contains_key(room_id) {
             return Err(format!("Room '{}' already exists", room_id));
         }
