@@ -785,12 +785,11 @@ async fn process_action(
 
                 // If only all-in players remain, run it out.
                 if room.game_state.actionable_players().is_empty() {
-                    broadcast_allin_showdown(&mut room);
-
-                    // Release lock before the timed loop so we can
-                    // cleanly re-acquire it each iteration.
+                    // Release lock before the blocking equity
+                    // calculation so we don't starve other tasks.
                     drop(room);
 
+                    broadcast_allin_showdown(room_arc).await;
                     run_out_board(room_arc).await;
                     return;
                 }
@@ -943,8 +942,8 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>) {
                                 broadcast(&mut room.player_senders, m);
                             }
                             if room.game_state.actionable_players().is_empty() {
-                                broadcast_allin_showdown(&mut room);
                                 drop(room);
+                                broadcast_allin_showdown(room_arc).await;
                                 // Re-enter run_out_board (no process_action recursion).
                                 return Box::pin(run_out_board(room_arc)).await;
                             }
@@ -1156,43 +1155,59 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
 }
 
 /// Broadcast an all-in showdown with equity percentages.
-fn broadcast_allin_showdown(room: &mut Room) {
-    let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
+///
+/// The equity Monte Carlo simulation is CPU-bound, so it is offloaded to
+/// a blocking thread via [`tokio::task::spawn_blocking`] to avoid starving
+/// the async runtime.
+async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>) {
+    // --- 1. Extract data while holding the lock (cheap) ----------------
+    let (player_hands, hands_for_calc, board, community_cards) = {
+        let room = room_arc.lock().await;
+        let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
 
-    for &id in &room.game_state.player_order {
-        if let Some(player) = room.game_state.players.get(&id)
-            && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
-            && let Some((c1, c2)) = player.hole_cards
-        {
-            let cards = [card_to_info(&c1), card_to_info(&c2)];
-            player_hands.push((id, cards, Hand(c1, c2)));
+        for &id in &room.game_state.player_order {
+            if let Some(player) = room.game_state.players.get(&id)
+                && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
+                && let Some((c1, c2)) = player.hole_cards
+            {
+                let cards = [card_to_info(&c1), card_to_info(&c2)];
+                player_hands.push((id, cards, Hand(c1, c2)));
+            }
         }
-    }
 
-    if player_hands.len() < 2 {
-        return;
-    }
+        if player_hands.len() < 2 {
+            return;
+        }
 
-    let board = room.game_state.build_board();
-    let hands_for_calc: Vec<Hand> = player_hands
-        .iter()
-        .map(|(_, _, h)| Hand(h.0, h.1))
-        .collect();
-    let equities = calculate_equity_multi(&hands_for_calc, &board, 1000);
+        let board = room.game_state.build_board();
+        let hands_for_calc: Vec<Hand> = player_hands
+            .iter()
+            .map(|(_, _, h)| Hand(h.0, h.1))
+            .collect();
+        let community_cards: Vec<CardInfo> = room
+            .game_state
+            .community_cards
+            .iter()
+            .map(card_to_info)
+            .collect();
 
+        (player_hands, hands_for_calc, board, community_cards)
+    }; // lock released
+
+    // --- 2. Run the CPU-heavy equity simulation off the async runtime --
+    let equities =
+        tokio::task::spawn_blocking(move || calculate_equity_multi(&hands_for_calc, &board, 1000))
+            .await
+            .expect("equity calculation task panicked");
+
+    // --- 3. Re-acquire the lock and broadcast the result ---------------
     let hands_with_equity: Vec<(u32, [CardInfo; 2], f64)> = player_hands
         .iter()
         .enumerate()
         .map(|(i, (id, cards, _))| (*id, *cards, equities.get(i).copied().unwrap_or(0.0)))
         .collect();
 
-    let community_cards: Vec<CardInfo> = room
-        .game_state
-        .community_cards
-        .iter()
-        .map(card_to_info)
-        .collect();
-
+    let mut room = room_arc.lock().await;
     broadcast(
         &mut room.player_senders,
         &ServerMessage::AllInShowdown {
