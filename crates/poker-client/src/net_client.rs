@@ -92,8 +92,7 @@ impl NetClient {
         let (msg_tx, msg_rx) = mpsc::channel(INCOMING_CHANNEL_CAPACITY);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(OUTGOING_CHANNEL_CAPACITY);
 
-        Self::spawn_reader_task(reader, msg_tx);
-        Self::spawn_writer_task(writer, cmd_rx);
+        Self::spawn_io_tasks(reader, writer, msg_tx, cmd_rx);
 
         Self {
             incoming: msg_rx,
@@ -147,35 +146,44 @@ impl NetClient {
         let (msg_tx, msg_rx) = mpsc::channel(INCOMING_CHANNEL_CAPACITY);
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientMessage>(OUTGOING_CHANNEL_CAPACITY);
 
-        // Reader task (spawn_local — no Send required)
+        // Single combined I/O task: `select` ensures that when either the
+        // reader or writer loop exits, the other is dropped immediately.
+        // This prevents a half-dead connection where the UI never sees a
+        // disconnect because one side still holds `msg_tx` alive.
         wasm_bindgen_futures::spawn_local(async move {
-            while let Some(frame) = stream.next().await {
-                match frame {
-                    Ok(Message::Text(text)) => {
-                        if let Some(msg) = parse_server_line(&text)
-                            && msg_tx.send(msg).await.is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Ok(Message::Bytes(_)) => {} // skip binary frames
-                    Err(_) => break,
-                }
-            }
-            // Stream ended or error — channel drops, signalling disconnect.
-        });
+            use std::pin::pin;
 
-        // Writer task (spawn_local — no Send required)
-        wasm_bindgen_futures::spawn_local(async move {
-            while let Some(msg) = cmd_rx.recv().await {
-                let json = match serde_json::to_string(&msg) {
-                    Ok(j) => j,
-                    Err(_) => continue,
-                };
-                if sink.send(Message::Text(json)).await.is_err() {
-                    break;
+            let reader_fut = async {
+                while let Some(frame) = stream.next().await {
+                    match frame {
+                        Ok(Message::Text(text)) => {
+                            if let Some(msg) = parse_server_line(&text)
+                                && msg_tx.send(msg).await.is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Ok(Message::Bytes(_)) => {} // skip binary frames
+                        Err(_) => break,
+                    }
                 }
-            }
+            };
+
+            let writer_fut = async {
+                while let Some(msg) = cmd_rx.recv().await {
+                    let json = match serde_json::to_string(&msg) {
+                        Ok(j) => j,
+                        Err(_) => continue,
+                    };
+                    if sink.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
+                }
+            };
+
+            futures_util::future::select(pin!(reader_fut), pin!(writer_fut)).await;
+            // Whichever finished first, both halves are now dropped —
+            // channels close, cleanly signalling disconnect to the UI.
         });
 
         Ok(Self {
@@ -188,40 +196,44 @@ impl NetClient {
     // Private: background task spawners (native only)
     // ------------------------------------------------------------------
 
-    /// Spawn the generic reader task that reads from any [`TransportReader`].
+    /// Spawn combined reader + writer I/O tasks.
+    ///
+    /// Both loops run inside **one** `tokio::select!` so that when either
+    /// the reader or writer exits (error, EOF, channel close) the other is
+    /// cancelled immediately.  This ensures `msg_tx` and `cmd_rx` are both
+    /// dropped, so the UI sees a clean disconnect without delay.
     #[cfg(feature = "native")]
-    fn spawn_reader_task<R: TransportReader>(
+    fn spawn_io_tasks<R: TransportReader, W: TransportWriter>(
         mut reader: R,
-        msg_tx: mpsc::Sender<ServerMessage>,
-    ) {
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = reader.recv().await {
-                if let Some(msg) = parse_server_line(&line)
-                    && msg_tx.send(msg).await.is_err()
-                {
-                    break;
-                }
-            }
-            // Connection closed or error — channel drops, signalling disconnect.
-        });
-    }
-
-    /// Spawn the generic writer task that writes to any [`TransportWriter`].
-    #[cfg(feature = "native")]
-    fn spawn_writer_task<W: TransportWriter>(
         mut writer: W,
+        msg_tx: mpsc::Sender<ServerMessage>,
         mut cmd_rx: mpsc::Receiver<ClientMessage>,
     ) {
         tokio::spawn(async move {
-            while let Some(msg) = cmd_rx.recv().await {
-                let json = match serde_json::to_string(&msg) {
-                    Ok(j) => j,
-                    Err(_) => continue,
-                };
-                if writer.send(&json).await.is_err() {
-                    break;
-                }
+            tokio::select! {
+                () = async {
+                    while let Ok(Some(line)) = reader.recv().await {
+                        if let Some(msg) = parse_server_line(&line)
+                            && msg_tx.send(msg).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                } => {}
+                () = async {
+                    while let Some(msg) = cmd_rx.recv().await {
+                        let json = match serde_json::to_string(&msg) {
+                            Ok(j) => j,
+                            Err(_) => continue,
+                        };
+                        if writer.send(&json).await.is_err() {
+                            break;
+                        }
+                    }
+                } => {}
             }
+            // Whichever branch finished first, both `msg_tx` and `cmd_rx`
+            // are dropped here, cleanly signalling disconnect to the UI.
         });
     }
 }
