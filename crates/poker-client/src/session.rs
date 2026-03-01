@@ -18,6 +18,10 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = 5;
 /// Base delay between reconnection attempts in ms (doubles each attempt).
 pub const RECONNECT_BASE_DELAY_MS: u64 = 1_000;
 
+/// Maximum time (in seconds) to wait for a rejoin confirmation before
+/// giving up and returning `None`.
+pub const REJOIN_TIMEOUT_SECS: u64 = 10;
+
 // ---------------------------------------------------------------------------
 // Session persistence trait
 // ---------------------------------------------------------------------------
@@ -52,31 +56,51 @@ pub async fn try_rejoin(
     name: &str,
     session_token: &str,
 ) -> Option<ClientController> {
+    use futures_util::future::{select, Either};
+    use std::pin::pin;
+
     let mut ctrl = ClientController::connect_ws(ws_url, name).await.ok()?;
     ctrl.send(ClientMessage::Rejoin {
         room_id: room_id.to_string(),
         session_token: session_token.to_string(),
     });
 
-    // Wait for Rejoined or an error.
-    loop {
-        match ctrl.recv().await {
-            PollResult::Updated(changed) => {
-                if (changed.players || changed.phase)
-                    && ctrl.state.our_player_id != 0
-                    && !ctrl.state.room_id.is_empty()
-                {
-                    return Some(ctrl);
+    // Wait for Rejoined or an error, but give up after REJOIN_TIMEOUT_SECS
+    // so we never hang the frontend indefinitely.
+    let recv_loop = async move {
+        loop {
+            match ctrl.recv().await {
+                PollResult::Updated(changed) => {
+                    if (changed.players || changed.phase)
+                        && ctrl.state.our_player_id != 0
+                        && !ctrl.state.room_id.is_empty()
+                    {
+                        return Some(ctrl);
+                    }
+                    // Check if the latest event is an error (session expired).
+                    if let Some(ev) = ctrl.state.events.back()
+                        && matches!(ev, GameEvent::ServerError { .. })
+                    {
+                        return None;
+                    }
                 }
-                // Check if the latest event is an error (session expired).
-                if let Some(ev) = ctrl.state.events.back()
-                    && matches!(ev, GameEvent::ServerError { .. })
-                {
-                    return None;
-                }
+                PollResult::Disconnected => return None,
+                _ => {}
             }
-            PollResult::Disconnected => return None,
-            _ => {}
         }
+    };
+
+    #[cfg(feature = "native")]
+    let timeout = pin!(tokio::time::sleep(std::time::Duration::from_secs(
+        REJOIN_TIMEOUT_SECS,
+    )));
+    #[cfg(all(feature = "web", not(feature = "native")))]
+    let timeout = pin!(gloo_timers::future::TimeoutFuture::new(
+        (REJOIN_TIMEOUT_SECS * 1000) as u32,
+    ));
+
+    match select(pin!(recv_loop), timeout).await {
+        Either::Left((result, _)) => result,
+        Either::Right(_) => None, // timed out
     }
 }
