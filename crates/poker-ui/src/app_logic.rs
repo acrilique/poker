@@ -272,6 +272,16 @@ pub async fn run_app_session<F, Fut>(
             match ctrl.recv().await {
                 PollResult::Updated(changed) => {
                     game_state.set(ctrl.snapshot());
+                    // Check for room-level errors (e.g. room not found, room full).
+                    if changed.room_error {
+                        let err_msg = ctrl
+                            .game_state()
+                            .last_room_error
+                            .clone()
+                            .unwrap_or_else(|| "Failed to join room".to_string());
+                        conn_error.set(err_msg);
+                        break false;
+                    }
                     if (changed.phase || changed.players) && ctrl.game_state().our_player_id != 0 {
                         // Persist session for reconnection.
                         session.save(&ws_url, &room_id, &name, &ctrl.game_state().session_token);

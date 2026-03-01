@@ -193,12 +193,20 @@ pub struct StateChanged {
     pub phase: bool,
     /// The turn timer changed (started for a new player).
     pub timer: bool,
+    /// A room-level error was received (e.g. room not found, room full).
+    pub room_error: bool,
 }
 
 impl StateChanged {
     /// Returns `true` if any flag is set.
     pub fn any(self) -> bool {
-        self.actions || self.players || self.cards || self.pot || self.phase || self.timer
+        self.actions
+            || self.players
+            || self.cards
+            || self.pot
+            || self.phase
+            || self.timer
+            || self.room_error
     }
 }
 
@@ -286,6 +294,9 @@ pub struct ClientGameState {
     pub is_host: bool,
     /// Whether late entry is currently allowed.
     pub allow_late_entry: bool,
+    /// Last room-level error received from the server (e.g. "Room 'xyz' not found").
+    /// Cleared when a new connection attempt starts.
+    pub last_room_error: Option<String>,
 }
 
 impl ClientGameState {
@@ -329,6 +340,7 @@ impl ClientGameState {
             showdown_hands: Vec::new(),
             is_host: false,
             allow_late_entry: false,
+            last_room_error: None,
         }
     }
 
@@ -753,9 +765,11 @@ impl ClientGameState {
                 changed.phase = true;
             }
             ServerMessage::RoomError { message } => {
+                self.last_room_error = Some(message.clone());
                 self.add_event(GameEvent::ServerError {
                     message: message.clone(),
                 });
+                changed.room_error = true;
             }
             ServerMessage::BlindsIncreased {
                 small_blind,
