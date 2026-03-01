@@ -491,6 +491,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
 
             // If the game was paused waiting for players, check whether
             // we now have enough active players to start a new hand.
+            // Toggle `waiting_for_players` to false *before* releasing
+            // the lock so that a concurrent SitIn handler won't also
+            // trigger a new hand.
             if room.game_state.waiting_for_players {
                 let active_count = room
                     .game_state
@@ -505,6 +508,9 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                     })
                     .count();
                 if active_count >= 2 {
+                    // Claim the transition: no other task will enter this
+                    // branch until `waiting_for_players` is set back to true.
+                    room.game_state.waiting_for_players = false;
                     drop(room);
                     let sitting_out = maybe_start_new_hand(room_arc).await;
                     if let Some((pid, act)) = sitting_out {
@@ -1091,10 +1097,15 @@ fn notify_turn_and_start_timer(
 ///
 /// If the forced action is a fold (i.e. the player could not simply check),
 /// the player is also automatically sat out.
+///
+/// All validity checks, action determination, and sit-out logic are performed
+/// under a single lock acquisition to prevent a real player action from
+/// slipping in between (which would cause a spurious "Not your turn" error).
 async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, player_id: u32) {
-    // Quick pre-check under the lock to confirm the turn is still valid.
-    {
-        let room = room_arc.lock().await;
+    // Perform everything under one lock to close the gap between
+    // validity check and process_action.
+    let action = {
+        let mut room = room_arc.lock().await;
 
         if room.turn_counter.load(Ordering::SeqCst) != expected_turn {
             return;
@@ -1105,28 +1116,23 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
         if room.game_state.current_player_id() != Some(player_id) {
             return;
         }
-    }
 
-    // Determine the forced action (check if valid, otherwise fold).
-    let action = {
-        let room = room_arc.lock().await;
+        // Determine the forced action (check if valid, otherwise fold).
         let valid = room.game_state.valid_actions(player_id);
-        if valid.contains(&PlayerAction::Check) {
+        let act = if valid.contains(&PlayerAction::Check) {
             PlayerAction::Check
         } else {
             PlayerAction::Fold
-        }
-    };
+        };
 
-    // If forced to fold, automatically sit the player out.
-    if action == PlayerAction::Fold {
-        let mut room = room_arc.lock().await;
-        if !room
-            .game_state
-            .players
-            .get(&player_id)
-            .map(|p| p.sitting_out)
-            .unwrap_or(true)
+        // If forced to fold, automatically sit the player out.
+        if act == PlayerAction::Fold
+            && !room
+                .game_state
+                .players
+                .get(&player_id)
+                .map(|p| p.sitting_out)
+                .unwrap_or(true)
         {
             room.game_state.set_sitting_out(player_id);
             broadcast(
@@ -1135,7 +1141,9 @@ async fn force_timeout_action(room_arc: Arc<Mutex<Room>>, expected_turn: u64, pl
             );
             tracing::info!(player = player_id, "Auto sitting out after timeout fold");
         }
-    }
+
+        act
+    }; // lock released
 
     tracing::info!(
         player = player_id,
