@@ -713,10 +713,12 @@ impl GameState {
                     continue;
                 }
 
-                let share = pot_amount / pot_winners.len() as u32;
-                for id in &pot_winners {
+                let num_winners = pot_winners.len() as u32;
+                let share = pot_amount / num_winners;
+                let remainder = pot_amount % num_winners;
+                for (i, id) in pot_winners.iter().enumerate() {
                     let entry = winnings.entry(*id).or_insert((0, rank.clone()));
-                    entry.0 += share;
+                    entry.0 += share + if (i as u32) < remainder { 1 } else { 0 };
                 }
             }
         }
