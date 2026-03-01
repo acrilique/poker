@@ -21,9 +21,10 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
         div { class: "flex flex-col items-center h-full gap-2 p-2 lg:justify-center lg:gap-6 lg:p-4",
             // Room ID + Stage / hand info
             div { class: "flex items-center justify-between w-full px-1 mb-1 text-foreground/60 text-xs tracking-wide uppercase lg:mb-0 lg:justify-center lg:gap-4 lg:text-sm lg:w-auto lg:px-0",
-                div { class: "bg-surface border border-muted/50 rounded px-2 py-0.5 select-all cursor-pointer lg:px-3 lg:py-1",
+                div { class: "bg-surface border border-muted/50 rounded px-2 py-0.5 cursor-pointer lg:px-3 lg:py-1",
                     title: "Room ID — click to select",
-                    "Room: {gs.room_id}"
+                    "Room: "
+                    span { class: "select-all", "{gs.room_id}" }
                 }
                 div { "Hand #{gs.hand_number}  ·  {gs.stage}" }
             }
