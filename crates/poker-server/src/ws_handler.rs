@@ -15,7 +15,10 @@ use crate::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use poker_core::poker::{Hand, calculate_equity_multi};
-use poker_core::protocol::{CardInfo, ClientMessage, PlayerAction, ServerMessage, card_to_info};
+use poker_core::protocol::{
+    CardInfo, ClientMessage, GameError, PlayerAction, RoomErrorKind, ServerMessage, Stage,
+    card_to_info,
+};
 use tokio::sync::Mutex;
 
 use crate::room::{PlayerRx, Room, RoomManager, broadcast, send_to_player};
@@ -42,8 +45,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                 let msg: ClientMessage = match serde_json::from_str(&text) {
                     Ok(m) => m,
                     Err(e) => {
-                        let err = ServerMessage::Error {
-                            message: format!("Invalid message: {e}"),
+                        let err = ServerMessage::GameError {
+                            error: GameError::InvalidMessage {
+                                detail: e.to_string(),
+                            },
                         };
                         send_one(&ws_sink, &err).await;
                         continue;
@@ -70,7 +75,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             send_one(
                                 &ws_sink,
                                 &ServerMessage::RoomError {
-                                    message: e.to_string(),
+                                    error: RoomErrorKind::from(&e),
                                 },
                             )
                             .await;
@@ -173,10 +178,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                 // Community cards.
                                 if !room.game_state.community_cards.is_empty() {
                                     let stage = match room.game_state.phase {
-                                        GamePhase::Flop => "flop",
-                                        GamePhase::Turn => "turn",
-                                        GamePhase::River => "river",
-                                        _ => "flop",
+                                        GamePhase::Flop => Stage::Flop,
+                                        GamePhase::Turn => Stage::Turn,
+                                        GamePhase::River => Stage::River,
+                                        _ => Stage::Flop,
                                     };
                                     let cards: Vec<poker_core::protocol::CardInfo> = room
                                         .game_state
@@ -186,10 +191,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                                         .collect();
                                     send_one(
                                         &ws_sink,
-                                        &ServerMessage::CommunityCards {
-                                            stage: stage.to_string(),
-                                            cards,
-                                        },
+                                        &ServerMessage::CommunityCards { stage, cards },
                                     )
                                     .await;
                                 }
@@ -224,7 +226,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             send_one(
                                 &ws_sink,
                                 &ServerMessage::RoomError {
-                                    message: e.to_string(),
+                                    error: RoomErrorKind::from(&e),
                                 },
                             )
                             .await;
@@ -252,7 +254,7 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                             send_one(
                                 &ws_sink,
                                 &ServerMessage::RoomError {
-                                    message: e.to_string(),
+                                    error: RoomErrorKind::from(&e),
                                 },
                             )
                             .await;
@@ -264,8 +266,8 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                     _ => {
                         send_one(
                             &ws_sink,
-                            &ServerMessage::Error {
-                                message: "Must create or join a room first".to_string(),
+                            &ServerMessage::GameError {
+                                error: GameError::NotInRoom,
                             },
                         )
                         .await;
@@ -312,8 +314,10 @@ pub async fn handle_socket(socket: WebSocket, room_manager: Arc<RoomManager>) {
                     Err(e) => {
                         send_one(
                             &ws_sink,
-                            &ServerMessage::Error {
-                                message: format!("Invalid message: {e}"),
+                            &ServerMessage::GameError {
+                                error: GameError::InvalidMessage {
+                                    detail: e.to_string(),
+                                },
                             },
                         )
                         .await;
@@ -362,8 +366,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             send_to_player(
                 &mut room.player_senders,
                 player_id,
-                &ServerMessage::Error {
-                    message: "Already in a room".to_string(),
+                &ServerMessage::GameError {
+                    error: GameError::AlreadyInRoom,
                 },
             );
         }
@@ -414,8 +418,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: "Game already started".to_string(),
+                    &ServerMessage::GameError {
+                        error: GameError::GameAlreadyStarted,
                     },
                 );
                 return;
@@ -424,8 +428,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: "Need at least 2 players to start".to_string(),
+                    &ServerMessage::GameError {
+                        error: GameError::NotEnoughPlayers,
                     },
                 );
                 return;
@@ -551,8 +555,8 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: "Only the host can toggle late entry".to_string(),
+                    &ServerMessage::GameError {
+                        error: GameError::NotHost,
                     },
                 );
                 return;
@@ -584,8 +588,8 @@ async fn process_action(
         send_to_player(
             &mut room.player_senders,
             player_id,
-            &ServerMessage::Error {
-                message: "Game not started".to_string(),
+            &ServerMessage::GameError {
+                error: GameError::GameNotStarted,
             },
         );
         return;
@@ -595,8 +599,8 @@ async fn process_action(
         send_to_player(
             &mut room.player_senders,
             player_id,
-            &ServerMessage::Error {
-                message: "Not your turn".to_string(),
+            &ServerMessage::GameError {
+                error: GameError::NotYourTurn,
             },
         );
         return;
@@ -607,8 +611,10 @@ async fn process_action(
         send_to_player(
             &mut room.player_senders,
             player_id,
-            &ServerMessage::Error {
-                message: format!("Invalid action. Valid: {:?}", valid),
+            &ServerMessage::GameError {
+                error: GameError::ActionNotAllowed {
+                    valid_actions: valid,
+                },
             },
         );
         return;
@@ -620,8 +626,8 @@ async fn process_action(
             send_to_player(
                 &mut room.player_senders,
                 player_id,
-                &ServerMessage::Error {
-                    message: "Player not found".to_string(),
+                &ServerMessage::GameError {
+                    error: GameError::PlayerNotFound,
                 },
             );
             return;
@@ -646,8 +652,8 @@ async fn process_action(
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: "Cannot check, must call or raise".to_string(),
+                    &ServerMessage::GameError {
+                        error: GameError::CannotCheck,
                     },
                 );
                 return;
@@ -681,11 +687,11 @@ async fn process_action(
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: format!(
-                            "Not enough chips. Have {}, need {}",
-                            player.chips, raise_total
-                        ),
+                    &ServerMessage::GameError {
+                        error: GameError::InsufficientChips {
+                            have: player.chips,
+                            need: raise_total,
+                        },
                     },
                 );
                 return;
@@ -695,8 +701,8 @@ async fn process_action(
                 send_to_player(
                     &mut room.player_senders,
                     player_id,
-                    &ServerMessage::Error {
-                        message: format!("Minimum raise is {}", min_raise),
+                    &ServerMessage::GameError {
+                        error: GameError::MinimumRaise { min_raise },
                     },
                 );
                 return;

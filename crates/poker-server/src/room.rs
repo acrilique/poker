@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use crate::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_core::protocol::{
-    BlindConfig, CardInfo, PlayerInfo, RoomIdError, ServerMessage, card_to_info, validate_room_id,
+    BlindConfig, CardInfo, PlayerInfo, RoomErrorKind, RoomIdError, ServerMessage, Stage,
+    card_to_info, validate_room_id,
 };
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, mpsc};
@@ -72,6 +73,29 @@ pub enum RoomError {
     /// The player's session was valid but the player was already removed.
     #[error("Session expired — player was removed")]
     SessionExpired,
+}
+
+impl From<&RoomError> for RoomErrorKind {
+    fn from(err: &RoomError) -> Self {
+        match err {
+            RoomError::InvalidRoomId(e) => match e {
+                RoomIdError::Empty => RoomErrorKind::RoomIdEmpty,
+                RoomIdError::TooLong => RoomErrorKind::RoomIdTooLong,
+                RoomIdError::InvalidChars => RoomErrorKind::RoomIdInvalidChars,
+            },
+            RoomError::ServerFull => RoomErrorKind::ServerFull,
+            RoomError::RoomAlreadyExists(id) => RoomErrorKind::RoomAlreadyExists {
+                room_id: id.clone(),
+            },
+            RoomError::RoomNotFound(id) => RoomErrorKind::RoomNotFound {
+                room_id: id.clone(),
+            },
+            RoomError::RoomFull => RoomErrorKind::RoomFull,
+            RoomError::GameInProgress => RoomErrorKind::GameInProgress,
+            RoomError::InvalidSession => RoomErrorKind::InvalidSession,
+            RoomError::SessionExpired => RoomErrorKind::SessionExpired,
+        }
+    }
 }
 
 /// Handle to a per-player outbound channel.
@@ -219,14 +243,13 @@ impl Room {
         let chips = gs.players.get(&player_id).map(|p| p.chips).unwrap_or(0);
 
         let stage = match gs.phase {
-            GamePhase::Lobby => "Waiting",
-            GamePhase::PreFlop => "Preflop",
-            GamePhase::Flop => "Flop",
-            GamePhase::Turn => "Turn",
-            GamePhase::River => "River",
-            GamePhase::Showdown => "Showdown",
-        }
-        .to_string();
+            GamePhase::Lobby => Stage::Preflop,
+            GamePhase::PreFlop => Stage::Preflop,
+            GamePhase::Flop => Stage::Flop,
+            GamePhase::Turn => Stage::Turn,
+            GamePhase::River => Stage::River,
+            GamePhase::Showdown => Stage::Showdown,
+        };
 
         // Determine blind positions from current hand state.
         let n = gs.player_order.len();

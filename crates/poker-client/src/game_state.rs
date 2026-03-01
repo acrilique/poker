@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use poker_core::poker::{Board, Hand, HandRank};
 use poker_core::protocol::{
-    BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage,
+    BlindConfig, CardInfo, ClientMessage, PlayerAction, PlayerInfo, ServerMessage, Stage,
 };
 use thiserror::Error;
 
@@ -254,7 +254,7 @@ pub struct ClientGameState {
     /// Current big blind amount (for display in BB units)
     pub big_blind: u32,
     /// Game stage (preflop, flop, turn, river)
-    pub stage: String,
+    pub stage: Stage,
     /// Dealer ID
     pub dealer_id: u32,
     /// Small blind player ID
@@ -321,7 +321,7 @@ impl ClientGameState {
             our_chips: 0,
             our_name: name.to_string(),
             big_blind: 0,
-            stage: "Waiting".to_string(),
+            stage: Stage::Preflop,
             dealer_id: 0,
             small_blind_id: 0,
             big_blind_id: 0,
@@ -523,7 +523,7 @@ impl ClientGameState {
                 self.showdown_hands.clear();
                 self.folded_players.clear();
                 self.pot = small_blind + big_blind;
-                self.stage = "Preflop".to_string();
+                self.stage = Stage::Preflop;
                 self.is_our_turn = false;
                 self.turn_timer_player = None;
                 self.turn_timer_secs = 0;
@@ -550,9 +550,9 @@ impl ClientGameState {
             }
             ServerMessage::CommunityCards { stage, cards } => {
                 self.community_cards = cards.clone();
-                self.stage = stage.clone();
+                self.stage = *stage;
                 self.add_event(GameEvent::CommunityCards {
-                    stage: stage.clone(),
+                    stage: stage.to_string(),
                     cards: cards.clone(),
                 });
                 changed.cards = true;
@@ -696,9 +696,9 @@ impl ClientGameState {
             ServerMessage::Pong => {
                 self.add_event(GameEvent::Pong);
             }
-            ServerMessage::Error { message } => {
+            ServerMessage::GameError { error } => {
                 self.add_event(GameEvent::ServerError {
-                    message: message.clone(),
+                    message: error.to_string(),
                 });
             }
             ServerMessage::RoomCreated { .. } => {
@@ -741,7 +741,7 @@ impl ClientGameState {
                 self.game_started = *game_started;
                 self.hand_number = *hand_number;
                 self.pot = *pot;
-                self.stage = stage.clone();
+                self.stage = *stage;
                 self.community_cards = community_cards.clone();
                 self.hole_cards = *hole_cards;
                 self.players = players.clone();
@@ -764,10 +764,10 @@ impl ClientGameState {
                 changed.pot = true;
                 changed.phase = true;
             }
-            ServerMessage::RoomError { message } => {
-                self.last_room_error = Some(message.clone());
+            ServerMessage::RoomError { error } => {
+                self.last_room_error = Some(error.to_string());
                 self.add_event(GameEvent::ServerError {
-                    message: message.clone(),
+                    message: error.to_string(),
                 });
                 changed.room_error = true;
             }

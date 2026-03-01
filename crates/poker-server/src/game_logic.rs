@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use poker_core::poker::{Board, Card, Hand, get_all_cards};
-use poker_core::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage, card_to_info};
+use poker_core::protocol::{
+    BlindConfig, CardInfo, PlayerAction, ServerMessage, Stage, card_to_info,
+};
 use rand::rng;
 use rand::seq::SliceRandom;
 
@@ -509,7 +511,7 @@ impl GameState {
                 }
                 let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
                 messages.push(ServerMessage::CommunityCards {
-                    stage: "flop".to_string(),
+                    stage: Stage::Flop,
                     cards,
                 });
             }
@@ -520,7 +522,7 @@ impl GameState {
                 }
                 let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
                 messages.push(ServerMessage::CommunityCards {
-                    stage: "turn".to_string(),
+                    stage: Stage::Turn,
                     cards,
                 });
             }
@@ -531,7 +533,7 @@ impl GameState {
                 }
                 let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
                 messages.push(ServerMessage::CommunityCards {
-                    stage: "river".to_string(),
+                    stage: Stage::River,
                     cards,
                 });
             }
