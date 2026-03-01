@@ -446,6 +446,9 @@ impl ClientGameState {
             ServerMessage::PlayerLeft { player_id } => {
                 let name = self.player_name(*player_id);
                 self.players.retain(|p| p.id != *player_id);
+                self.folded_players.remove(player_id);
+                self.sitting_out_players.remove(player_id);
+                self.player_bets.remove(player_id);
                 self.add_event(GameEvent::PlayerLeft {
                     player_id: *player_id,
                     name,
