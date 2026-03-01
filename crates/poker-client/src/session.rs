@@ -62,10 +62,9 @@ pub async fn try_rejoin(
     loop {
         match ctrl.recv().await {
             PollResult::Updated(changed) => {
-                if changed.players
-                    || changed.phase
-                        && ctrl.state.our_player_id != 0
-                        && !ctrl.state.room_id.is_empty()
+                if (changed.players || changed.phase)
+                    && ctrl.state.our_player_id != 0
+                    && !ctrl.state.room_id.is_empty()
                 {
                     return Some(ctrl);
                 }
