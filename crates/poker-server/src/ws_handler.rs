@@ -855,8 +855,33 @@ async fn maybe_start_new_hand(room_arc: &Arc<Mutex<Room>>) -> Option<(u32, Playe
     // sit-out, ping and other messages can still be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-    // re-acquire the lock and start the hand.
+    // Re-acquire the lock and re-check conditions. Players may have
+    // disconnected, sat out, or been eliminated during the sleep.
     let mut room = room_arc.lock().await;
+
+    if !room.game_state.game_started {
+        return None;
+    }
+
+    let active_count = room
+        .game_state
+        .player_order
+        .iter()
+        .filter(|id| {
+            room.game_state
+                .players
+                .get(id)
+                .map(|p| !p.sitting_out && p.chips > 0)
+                .unwrap_or(false)
+        })
+        .count();
+
+    if active_count < 2 {
+        room.game_state.waiting_for_players = true;
+        broadcast(&mut room.player_senders, &ServerMessage::WaitingForPlayers);
+        return None;
+    }
+
     let hand_msgs = room.game_state.start_new_hand();
     for m in &hand_msgs {
         broadcast(&mut room.player_senders, m);
