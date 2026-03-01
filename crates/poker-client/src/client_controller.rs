@@ -33,9 +33,20 @@ pub enum PollResult {
 }
 
 /// Owns the network client and game state, providing event dispatch logic.
+///
+/// Frontends should treat the game state as **read-only** and use the
+/// controller methods to mutate it:
+///
+/// - [`game_state()`](Self::game_state) — immutable view of the current state.
+/// - [`snapshot()`](Self::snapshot) — cheap `Clone` for UI signals / snapshots.
+/// - [`send()`](Self::send) — forward a player action to the server.
+/// - [`add_message()`](Self::add_message) — append a local UI message.
+///
+/// The `state` field is crate-private so external code cannot accidentally
+/// mutate it.
 pub struct ClientController {
     net: NetClient,
-    pub state: ClientGameState,
+    pub(crate) state: ClientGameState,
 }
 
 impl ClientController {
@@ -109,9 +120,9 @@ impl ClientController {
         &self.state
     }
 
-    /// Borrow the underlying [`ClientGameState`] mutably.
-    pub fn game_state_mut(&mut self) -> &mut ClientGameState {
-        &mut self.state
+    /// Clone the current game state (cheap snapshot for UI signals).
+    pub fn snapshot(&self) -> ClientGameState {
+        self.state.clone()
     }
 
     /// Append a local feedback message to the game event log.

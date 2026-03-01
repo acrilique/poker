@@ -67,11 +67,11 @@ pub async fn start_client(
     loop {
         match ctrl.recv().await {
             PollResult::Updated(changed) => {
-                if (changed.phase || changed.players) && ctrl.state.our_player_id != 0 {
+                if (changed.phase || changed.players) && ctrl.game_state().our_player_id != 0 {
                     break; // Successfully joined.
                 }
                 // Check for room errors surfaced as events.
-                if let Some(last) = ctrl.state.events.back()
+                if let Some(last) = ctrl.game_state().events.back()
                     && let poker_client::game_state::GameEvent::ServerError { message } = last
                 {
                     return Err(ClientError::RoomError(message.clone()));
@@ -97,7 +97,7 @@ pub async fn start_client(
 
 async fn run_event_loop(tui: &mut Tui, ctrl: &mut ClientController) -> Result<(), ClientError> {
     loop {
-        tui.render(&ctrl.state)?;
+        tui.render(ctrl.game_state())?;
 
         let timeout = tokio::time::Duration::from_millis(50);
 
@@ -106,11 +106,11 @@ async fn run_event_loop(tui: &mut Tui, ctrl: &mut ClientController) -> Result<()
                 match poll {
                     PollResult::Updated(changed) => {
                         if changed.actions {
-                            tui.on_actions_changed(&ctrl.state);
+                            tui.on_actions_changed(ctrl.game_state());
                         }
                     }
                     PollResult::Disconnected => {
-                        tui.render(&ctrl.state)?;
+                        tui.render(ctrl.game_state())?;
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                         break;
                     }
@@ -119,7 +119,7 @@ async fn run_event_loop(tui: &mut Tui, ctrl: &mut ClientController) -> Result<()
             }
 
             _ = tokio::time::sleep(timeout) => {
-                match tui.poll_and_handle_input(&ctrl.state)? {
+                match tui.poll_and_handle_input(ctrl.game_state())?{
                     UserIntent::Quit => break,
                     UserIntent::Send(msg) => {
                         ctrl.send(msg);

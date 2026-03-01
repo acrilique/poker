@@ -203,7 +203,19 @@ impl StateChanged {
 }
 
 /// Contains all poker game data the client tracks.
+///
+/// This is a **read-only view-model**: frontends clone it (via
+/// [`ClientController::snapshot()`](crate::client_controller::ClientController::snapshot))
+/// and bind the clone to their UI framework.  All mutations flow through
+/// [`ClientController`](crate::client_controller::ClientController), which
+/// applies [`ServerMessage`]s and exposes helper methods such as
+/// [`add_message()`](crate::client_controller::ClientController::add_message).
+///
+/// Fields are `pub` for convenient read access on cloned snapshots.
+/// Direct mutation of the live state inside `ClientController` is prevented
+/// at the compiler level (`state` is `pub(crate)`).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ClientGameState {
     /// Structured game events (replaces formatted log messages).
     pub events: VecDeque<GameEvent>,

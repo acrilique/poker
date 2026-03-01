@@ -41,10 +41,10 @@ pub async fn game_loop(
             poll = ctrl.recv() => {
                 match poll {
                     PollResult::Updated(_changed) => {
-                        game_state.set(ctrl.state.clone());
+                        game_state.set(ctrl.snapshot());
                     }
                     PollResult::Disconnected => {
-                        game_state.set(ctrl.state.clone());
+                        game_state.set(ctrl.snapshot());
                         return GameLoopExit::Disconnected;
                     }
                     PollResult::Empty => {}
@@ -112,47 +112,47 @@ pub async fn run_with_reconnect<F, Fut>(
         }
 
         // Disconnected — try to rejoin.
-        let session_token = ctrl.state.session_token.clone();
+        let session_token = ctrl.game_state().session_token.clone();
         if session_token.is_empty() {
             break; // No session token, can't reconnect.
         }
 
-        ctrl.state.add_message(
+        ctrl.add_message(
             "Connection lost. Attempting to reconnect…".to_string(),
             LogCategory::System,
         );
-        game_state.set(ctrl.state.clone());
+        game_state.set(ctrl.snapshot());
 
         let mut reconnected = false;
         for attempt in 0..MAX_RECONNECT_ATTEMPTS {
             let delay = RECONNECT_BASE_DELAY_MS * 2u64.pow(attempt);
             sleep_ms(delay).await;
 
-            ctrl.state.add_message(
+            ctrl.add_message(
                 format!(
                     "Reconnection attempt {} of {MAX_RECONNECT_ATTEMPTS}…",
                     attempt + 1
                 ),
                 LogCategory::System,
             );
-            game_state.set(ctrl.state.clone());
+            game_state.set(ctrl.snapshot());
 
             if let Some(new_ctrl) = session::try_rejoin(ws_url, room_id, name, &session_token).await
             {
                 *ctrl = new_ctrl;
-                session.save(ws_url, room_id, name, &ctrl.state.session_token);
-                game_state.set(ctrl.state.clone());
+                session.save(ws_url, room_id, name, &ctrl.game_state().session_token);
+                game_state.set(ctrl.snapshot());
                 reconnected = true;
                 break;
             }
         }
 
         if !reconnected {
-            ctrl.state.add_message(
+            ctrl.add_message(
                 "Could not reconnect. Session may have expired.".to_string(),
                 LogCategory::Error,
             );
-            game_state.set(ctrl.state.clone());
+            game_state.set(ctrl.snapshot());
             break;
         }
     }
@@ -188,8 +188,8 @@ pub async fn run_app_session<F, Fut>(
         if let Some(mut ctrl) = session::try_rejoin(&ws_url, &room_id, &name, &session_token).await
         {
             // Update the session token (may have been refreshed).
-            session.save(&ws_url, &room_id, &name, &ctrl.state.session_token);
-            game_state.set(ctrl.state.clone());
+            session.save(&ws_url, &room_id, &name, &ctrl.game_state().session_token);
+            game_state.set(ctrl.snapshot());
             screen.set(Screen::Game);
 
             // Enter the game loop with reconnection support.
@@ -271,10 +271,10 @@ pub async fn run_app_session<F, Fut>(
         let joined = loop {
             match ctrl.recv().await {
                 PollResult::Updated(changed) => {
-                    game_state.set(ctrl.state.clone());
-                    if (changed.phase || changed.players) && ctrl.state.our_player_id != 0 {
+                    game_state.set(ctrl.snapshot());
+                    if (changed.phase || changed.players) && ctrl.game_state().our_player_id != 0 {
                         // Persist session for reconnection.
-                        session.save(&ws_url, &room_id, &name, &ctrl.state.session_token);
+                        session.save(&ws_url, &room_id, &name, &ctrl.game_state().session_token);
                         screen.set(Screen::Game);
                         break true;
                     }
