@@ -18,7 +18,7 @@
 //! Action bar — fold/check, call, raise with presets.
 
 use dioxus::prelude::*;
-use poker_client::game_state::{ClientGameState, RAISE_PRESETS, RaisePreset};
+use poker_client::game_state::{ActionError, ClientGameState, RAISE_PRESETS, RaisePreset};
 use poker_core::protocol::PlayerAction;
 
 use crate::{StackDisplayMode, UiMessage, format_stack};
@@ -137,15 +137,59 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                 // Raise input + button
                 if can_raise || can_allin {
                     {
-                        let valid_raise = raise_input.read().parse::<f64>().is_ok();
-                        let raise_disabled_class = if valid_raise {
+                        // Parse the input first, then validate against game state.
+                        let parsed = raise_input.read().parse::<f64>().ok();
+                        let raise_amount: Option<u32> = parsed.map(|raw| {
+                            if mode == StackDisplayMode::Blinds && bb > 0 {
+                                (raw * bb as f64).round() as u32
+                            } else {
+                                raw as u32
+                            }
+                        });
+
+                        // Proactive validation: check if the amount would be
+                        // rejected *before* the user clicks the button.
+                        let validation_err = raise_amount.and_then(|amt| gs.validate_raise(amt));
+                        let is_valid = raise_amount.is_some() && validation_err.is_none();
+                        let has_input_error = raise_amount.is_some() && validation_err.is_some();
+
+                        // Tooltip explains why the button is disabled.
+                        let raise_title = validation_err
+                            .as_ref()
+                            .map(|e| match e {
+                                ActionError::BelowMinimumRaise { min_raise } => {
+                                    format!(
+                                        "Minimum raise is {}",
+                                        format_stack(*min_raise, bb, mode)
+                                    )
+                                }
+                                other => other.to_string(),
+                            })
+                            .unwrap_or_default();
+
+                        // Always-visible min raise label (when a minimum applies).
+                        let min_raise_label = if gs.min_raise > 0 && can_raise {
+                            format!("Min {}", format_stack(gs.min_raise, bb, mode))
+                        } else {
+                            String::new()
+                        };
+
+                        let raise_btn_class = if is_valid {
                             "px-4 py-2 bg-accent hover:bg-accent-light rounded-lg font-semibold text-base transition"
                         } else {
                             "px-4 py-2 bg-accent/50 rounded-lg font-semibold text-base/50 transition cursor-not-allowed"
                         };
+
+                        // Ring colour: red-ish when the typed amount is invalid.
+                        let input_ring = if has_input_error {
+                            "flex items-center bg-muted rounded-lg ring-2 ring-red-400/60"
+                        } else {
+                            "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent"
+                        };
+
                         rsx! {
                             div { class: "flex items-center gap-2",
-                                div { class: "flex items-center bg-muted rounded-lg focus-within:ring-2 focus-within:ring-accent",
+                                div { class: "{input_ring}",
                                     input {
                                         class: "bg-transparent px-3 py-2 text-foreground w-28 outline-none",
                                         r#type: "number",
@@ -153,29 +197,36 @@ pub fn ActionBar(state: Signal<ClientGameState>) -> Element {
                                         value: "{raise_input}",
                                         oninput: move |e| raise_input.set(e.value()),
                                     }
-                                    span { class: "pr-3 text-foreground/50 text-sm select-none",
+                                    span { class: "pr-3 text-foreground/50 text-sm select-none whitespace-nowrap",
                                         if mode == StackDisplayMode::Blinds && bb > 0 { "BB" } else { "chips" }
                                     }
                                 }
                                 button {
-                                    class: "{raise_disabled_class}",
-                                    disabled: !valid_raise,
+                                    class: "{raise_btn_class}",
+                                    disabled: !is_valid,
+                                    title: "{raise_title}",
                                     onclick: {
                                         move |_| {
                                             if let Ok(raw) = raise_input.read().parse::<f64>() {
-                                                let amount: u32 = if mode == StackDisplayMode::Blinds && bb > 0 {
-                                                    (raw * bb as f64).round() as u32
-                                                } else {
-                                                    raw as u32
-                                                };
-                                                match state.read().raise(amount, false) {
-                                                    Ok(msg) => coroutine.send(UiMessage::Action(msg)),
-                                                    Err(_e) => {} // TODO: show error feedback
+                                                let amount: u32 =
+                                                    if mode == StackDisplayMode::Blinds && bb > 0 {
+                                                        (raw * bb as f64).round() as u32
+                                                    } else {
+                                                        raw as u32
+                                                    };
+                                                if let Ok(msg) = state.read().raise(amount, false) {
+                                                    coroutine.send(UiMessage::Action(msg));
                                                 }
                                             }
                                         }
                                     },
                                     "Raise"
+                                }
+                                // Persistent min-raise hint (no layout shift).
+                                if !min_raise_label.is_empty() {
+                                    span { class: "text-xs text-foreground/40 select-none whitespace-nowrap",
+                                        "{min_raise_label}"
+                                    }
                                 }
                             }
                         }

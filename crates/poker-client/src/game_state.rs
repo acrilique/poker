@@ -34,6 +34,13 @@ pub enum ActionError {
     #[error("Raise amount must be greater than 0")]
     InvalidRaiseAmount,
 
+    /// The raise amount is below the minimum raise.
+    #[error("Minimum raise is {min_raise} chips")]
+    BelowMinimumRaise {
+        /// The minimum raise amount in chips.
+        min_raise: u32,
+    },
+
     /// A normal raise is unavailable but all-in is; hint the player.
     #[error("Raise not available. Select All-In and press Raise.")]
     RaiseUnavailableAllInPossible,
@@ -886,6 +893,15 @@ impl ClientGameState {
             }
             return Err(ActionError::RaiseUnavailable);
         }
+        // Client-side min-raise enforcement: only reject if the raise
+        // doesn't use the player's entire remaining stack (short all-ins
+        // are always allowed by the server).
+        let to_call = self.current_bet.saturating_sub(self.our_bet);
+        if self.min_raise > 0 && amount < self.min_raise && (to_call + amount) < self.our_chips {
+            return Err(ActionError::BelowMinimumRaise {
+                min_raise: self.min_raise,
+            });
+        }
         Ok(ClientMessage::Raise { amount })
     }
 
@@ -902,6 +918,15 @@ impl ClientGameState {
     pub fn max_raise(&self) -> u32 {
         let to_call = self.current_bet.saturating_sub(self.our_bet);
         self.our_chips.saturating_sub(to_call)
+    }
+
+    /// Validate a raise amount and return a user-facing reason if it is
+    /// invalid. Intended for the UI to show proactive feedback or disable
+    /// the raise button *before* the player clicks it.
+    ///
+    /// Returns `None` when the amount is valid.
+    pub fn validate_raise(&self, amount: u32) -> Option<ActionError> {
+        self.raise(amount, false).err()
     }
 }
 

@@ -600,7 +600,12 @@ impl Hand {
     #[inline]
     fn build_flush(sorted: &[Card], suit: CardSuit) -> FullHand {
         let mut result = [sorted[0]; 5];
-        for (idx, c) in sorted.iter().filter(|c| c.suit() == suit).take(5).enumerate() {
+        for (idx, c) in sorted
+            .iter()
+            .filter(|c| c.suit() == suit)
+            .take(5)
+            .enumerate()
+        {
             result[idx] = *c;
         }
         FullHand(result[0], result[1], result[2], result[3], result[4])
