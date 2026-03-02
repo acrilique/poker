@@ -259,7 +259,7 @@ impl GameState {
 
     /// Shuffle and create a new deck.
     pub fn new_deck(&mut self) {
-        self.deck = get_all_cards();
+        self.deck = get_all_cards().to_vec();
         let mut rng = rng();
         self.deck.shuffle(&mut rng);
     }

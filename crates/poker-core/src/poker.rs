@@ -688,14 +688,29 @@ pub fn get_all_numbers() -> [CardNumber; 13] {
     CardNumber::ALL
 }
 
-pub fn get_all_cards() -> Vec<Card> {
-    let mut cards = Vec::new();
-    for suit in CardSuit::ALL {
-        for number in get_all_numbers() {
-            cards.push(Card(number, suit));
+/// All 52 cards, ordered by suit then rank.
+pub const ALL_CARDS: [Card; 52] = {
+    let mut cards = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
+    let mut i = 0;
+    let suits = CardSuit::ALL;
+    let numbers = CardNumber::ALL;
+    let mut s = 0;
+    while s < suits.len() {
+        let mut n = 0;
+        while n < numbers.len() {
+            cards[i] = Card(numbers[n], suits[s]);
+            i += 1;
+            n += 1;
         }
+        s += 1;
     }
     cards
+};
+
+/// Returns [`ALL_CARDS`] by value.
+#[inline]
+pub fn get_all_cards() -> [Card; 52] {
+    ALL_CARDS
 }
 
 #[allow(dead_code)]
