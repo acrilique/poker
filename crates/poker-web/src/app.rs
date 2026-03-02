@@ -51,7 +51,9 @@ struct WebSessionStore;
 
 impl SessionStore for WebSessionStore {
     fn save(&self, ws_url: &str, room_id: &str, name: &str, session_token: &str) {
-        let window = web_sys::window().unwrap();
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         if let Ok(Some(storage)) = window.session_storage() {
             let _ = storage.set_item("poker_ws_url", ws_url);
             let _ = storage.set_item("poker_room_id", room_id);
@@ -74,7 +76,9 @@ impl SessionStore for WebSessionStore {
     }
 
     fn clear(&self) {
-        let window = web_sys::window().unwrap();
+        let Some(window) = web_sys::window() else {
+            return;
+        };
         if let Ok(Some(storage)) = window.session_storage() {
             let _ = storage.remove_item("poker_ws_url");
             let _ = storage.remove_item("poker_room_id");
