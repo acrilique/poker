@@ -104,9 +104,7 @@ fn bench_full_hand_compare(crit: &mut Criterion) {
 
 /// Benchmark `get_all_cards` (allocation cost).
 fn bench_get_all_cards(crit: &mut Criterion) {
-    crit.bench_function("get_all_cards", |b| {
-        b.iter(|| black_box(get_all_cards()))
-    });
+    crit.bench_function("get_all_cards", |b| b.iter(|| black_box(get_all_cards())));
 }
 
 /// Benchmark `get_all_numbers` (allocation cost).

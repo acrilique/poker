@@ -31,8 +31,8 @@
 //! );
 //! ```
 
+use rand::RngExt;
 use rand::rng;
-use rand::seq::SliceRandom;
 use std::fmt;
 
 /// Represents a card suit (Diamonds, Spades, Clubs, Hearts).
@@ -245,115 +245,100 @@ pub enum Winner {
 }
 
 impl FullHand {
-    /// Get all 5 cards as a sorted array (highest first). Zero heap allocation.
+    /// Determine the rank of this hand.
+    ///
+    /// Uses popcount + leading/trailing zeros for O(1) straight detection
+    /// and (distinct, max_count) to classify the hand without any second loop.
     #[inline]
-    fn cards(&self) -> [Card; 5] {
-        let mut cards = [self.0, self.1, self.2, self.3, self.4];
-        cards.sort_by_key(|c| std::cmp::Reverse(c.number()));
-        cards
-    }
-
-    /// Determine the rank of this hand
     pub fn rank(&self) -> HandRank {
-        let cards = self.cards();
-        let is_flush = cards.iter().all(|c| c.suit() == cards[0].suit());
-        let numbers = cards.map(|c| c.number());
-        let is_straight = is_consecutive(&numbers) || Self::is_wheel_numbers(&numbers);
-        let (counts_arr, counts_len) = self.get_counts();
-        let counts = &counts_arr[..counts_len];
+        let cards = [self.0, self.1, self.2, self.3, self.4];
 
-        match (is_flush, is_straight, counts) {
-            (true, true, _)
-                if cards[0].number() == CardNumber::Ace
-                    && cards[1].number() == CardNumber::King =>
-            {
-                HandRank::RoyalFlush
+        let mut rank_bits: u16 = 0;
+        let mut max_count: u8 = 1;
+        let mut rank_count = [0u8; 15]; // indexed by rank value (2..=14)
+        let first_suit = cards[0].suit() as u8;
+        let mut all_same_suit = true;
+
+        for c in &cards {
+            let r = c.number() as usize;
+            rank_count[r] += 1;
+            if rank_count[r] > max_count {
+                max_count = rank_count[r];
             }
-            (true, true, _) => HandRank::StraightFlush,
-            (_, _, [4, 1]) => HandRank::FourOfAKind,
-            (_, _, [3, 2]) => HandRank::FullHouse,
-            (true, false, _) => HandRank::Flush,
-            (false, true, _) => HandRank::Straight,
-            (_, _, [3, 1, 1]) => HandRank::ThreeOfAKind,
-            (_, _, [2, 2, 1]) => HandRank::TwoPair,
-            (_, _, [2, 1, 1, 1]) => HandRank::Pair,
+            rank_bits |= 1 << r;
+            if c.suit() as u8 != first_suit {
+                all_same_suit = false;
+            }
+        }
+
+        // O(1) straight detection via popcount + bit-span.
+        // A straight has 5 distinct ranks spanning exactly 4 (high - low),
+        // or it's a wheel (A-2-3-4-5).
+        let distinct = rank_bits.count_ones();
+        let is_straight = distinct == 5 && {
+            let lo = rank_bits.trailing_zeros();
+            let hi = 15 - rank_bits.leading_zeros();
+            (hi - lo == 4) || (rank_bits == WHEEL_MASK)
+        };
+
+        // (distinct, max_count) uniquely identifies every 5-card pattern:
+        //   (5,1) = high card / straight / flush / SF / RF
+        //   (4,2) = pair
+        //   (3,2) = two pair
+        //   (3,3) = three of a kind
+        //   (2,3) = full house
+        //   (2,4) = four of a kind
+        match (all_same_suit, is_straight, distinct, max_count) {
+            (true, true, _, _) if rank_bits & ROYAL_MASK == ROYAL_MASK => HandRank::RoyalFlush,
+            (true, true, _, _) => HandRank::StraightFlush,
+            (_, _, 2, 4) => HandRank::FourOfAKind,
+            (_, _, 2, 3) => HandRank::FullHouse,
+            (true, _, _, _) => HandRank::Flush,
+            (_, true, _, _) => HandRank::Straight,
+            (_, _, 3, 3) => HandRank::ThreeOfAKind,
+            (_, _, 3, 2) => HandRank::TwoPair,
+            (_, _, 4, 2) => HandRank::Pair,
             _ => HandRank::HighCard,
         }
     }
 
-    /// Check if this is a wheel (A-2-3-4-5)
-    fn is_wheel(&self) -> bool {
-        let numbers = self.cards().map(|c| c.number());
-        Self::is_wheel_numbers(&numbers)
-    }
-
-    /// Check wheel from a pre-computed numbers array.
+    /// Check if this 5-card hand is a wheel (A-2-3-4-5) using bitmask.
     #[inline]
-    fn is_wheel_numbers(numbers: &[CardNumber; 5]) -> bool {
-        numbers.contains(&CardNumber::Ace)
-            && numbers.contains(&CardNumber::Two)
-            && numbers.contains(&CardNumber::Three)
-            && numbers.contains(&CardNumber::Four)
-            && numbers.contains(&CardNumber::Five)
-    }
-
-    /// Get counts of each rank, sorted descending. Returns (array, length).
-    fn get_counts(&self) -> ([usize; 5], usize) {
-        let cards = self.cards();
-        let mut counts = [0usize; 5];
-        let mut seen = [CardNumber::Two; 5];
-        let mut len = 0usize;
-
-        for card in &cards {
-            let num = card.number();
-            let mut found = false;
-            for i in 0..len {
-                if seen[i] == num {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                seen[len] = num;
-                let count = cards.iter().filter(|c| c.number() == num).count();
-                counts[len] = count;
-                len += 1;
-            }
+    fn is_wheel(&self) -> bool {
+        let mut rank_bits: u16 = 0;
+        for c in [self.0, self.1, self.2, self.3, self.4] {
+            rank_bits |= 1 << (c.number() as u16);
         }
-        let slice = &mut counts[..len];
-        slice.sort_unstable_by(|a, b| b.cmp(a));
-        (counts, len)
+        rank_bits & WHEEL_MASK == WHEEL_MASK
     }
 
     /// Get card numbers grouped by count (for tiebreakers).
     /// Groups are sorted by count desc, then rank desc.
     fn get_ranked_groups(&self) -> [CardNumber; 5] {
-        let cards = self.cards();
-        let mut groups = [(0usize, CardNumber::Two); 5];
-        let mut seen = [CardNumber::Two; 5];
-        let mut len = 0usize;
+        let cards = [self.0, self.1, self.2, self.3, self.4];
+        let mut rank_count = [0u8; 15];
+        for c in &cards {
+            rank_count[c.number() as usize] += 1;
+        }
 
-        for card in &cards {
-            let num = card.number();
-            let mut found = false;
-            for i in 0..len {
-                if seen[i] == num {
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                seen[len] = num;
-                let count = cards.iter().filter(|c| c.number() == num).count();
-                groups[len] = (count, num);
-                len += 1;
+        // Collect only the ranks present in our 5 cards (max 5 unique).
+        let mut groups: [(u8, u8); 5] = [(0, 0); 5]; // (count, rank)
+        let mut glen = 0;
+        let mut seen_bits: u16 = 0;
+        for c in &cards {
+            let r = c.number() as u16;
+            if seen_bits & (1 << r) == 0 {
+                seen_bits |= 1 << r;
+                groups[glen] = (rank_count[r as usize], r as u8);
+                glen += 1;
             }
         }
-        // Sort the populated portion by count desc, then rank desc
-        groups[..len].sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        // Small sort (2-5 elements): by count desc, then rank desc.
+        groups[..glen].sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+
         let mut result = [CardNumber::Two; 5];
-        for i in 0..len {
-            result[i] = groups[i].1;
+        for i in 0..glen {
+            result[i] = rank_from_val(groups[i].1 as usize);
         }
         result
     }
@@ -417,395 +402,301 @@ impl Hand {
         (cards, 2 + blen)
     }
 
-    /// Returns the best possible 5-card hand
+    /// Returns the best possible 5-card hand using single-pass bitmask evaluation.
+    ///
+    /// Instead of trying each hand type sequentially (10 passes), this method:
+    /// 1. Sorts the 7 cards once
+    /// 2. Builds rank counts, suit counts, and bitmasks in one pass
+    /// 3. Uses the pre-computed data to directly determine the hand type
+    /// 4. Selects the optimal 5 cards for that hand type
     pub fn best(&self, board: &Board) -> Option<FullHand> {
-        self.try_royal_flush(board)
-            .or_else(|| self.try_straight_flush(board))
-            .or_else(|| self.try_poker(board))
-            .or_else(|| self.try_full_house(board))
-            .or_else(|| self.try_flush(board))
-            .or_else(|| self.try_straight(board))
-            .or_else(|| self.try_trio(board))
-            .or_else(|| self.try_doubles(board))
-            .or_else(|| self.try_pair(board))
-            .or_else(|| self.try_high_card(board))
-    }
-
-    /// Royal Flush: A, K, Q, J, 10 of the same suit
-    fn try_royal_flush(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let cards = &cards_arr[..cards_len];
-        for suit in CardSuit::ALL {
-            let ace = cards
-                .iter()
-                .find(|c| c.number() == CardNumber::Ace && c.suit() == suit);
-            let king = cards
-                .iter()
-                .find(|c| c.number() == CardNumber::King && c.suit() == suit);
-            let queen = cards
-                .iter()
-                .find(|c| c.number() == CardNumber::Queen && c.suit() == suit);
-            let jack = cards
-                .iter()
-                .find(|c| c.number() == CardNumber::Jack && c.suit() == suit);
-            let ten = cards
-                .iter()
-                .find(|c| c.number() == CardNumber::Ten && c.suit() == suit);
-
-            if let (Some(&a), Some(&k), Some(&q), Some(&j), Some(&t)) =
-                (ace, king, queen, jack, ten)
-            {
-                return Some(FullHand(a, k, q, j, t));
-            }
-        }
-        None
-    }
-
-    /// Straight Flush: 5 consecutive cards of the same suit
-    fn try_straight_flush(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let cards = &cards_arr[..cards_len];
-        for suit in CardSuit::ALL {
-            let mut suited = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
-            let mut slen = 0;
-            for c in cards.iter().filter(|c| c.suit() == suit) {
-                suited[slen] = *c;
-                slen += 1;
-            }
-            let suited_slice = &mut suited[..slen];
-            suited_slice.sort_by_key(|c| std::cmp::Reverse(c.number()));
-            // Manual dedup by rank (sorted, so duplicates are adjacent)
-            let mut deduped = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
-            let mut dlen = 0;
-            for i in 0..slen {
-                if dlen == 0 || suited_slice[i].number() != deduped[dlen - 1].number() {
-                    deduped[dlen] = suited_slice[i];
-                    dlen += 1;
-                }
-            }
-            let suited = &deduped[..dlen];
-
-            if dlen >= 5 {
-                for window in suited.windows(5) {
-                    let nums = [
-                        window[0].number(),
-                        window[1].number(),
-                        window[2].number(),
-                        window[3].number(),
-                        window[4].number(),
-                    ];
-                    if is_consecutive(&nums) {
-                        return Some(FullHand(
-                            window[0], window[1], window[2], window[3], window[4],
-                        ));
-                    }
-                }
-                // Check for wheel (A-2-3-4-5)
-                let has_ace = suited.iter().any(|c| c.number() == CardNumber::Ace);
-                let mut wheel = [Card(CardNumber::Two, CardSuit::Diamonds); 4];
-                let mut wlen = 0;
-                for c in suited.iter().filter(|c| {
-                    matches!(
-                        c.number(),
-                        CardNumber::Two | CardNumber::Three | CardNumber::Four | CardNumber::Five
-                    )
-                }) {
-                    if wlen < 4 {
-                        wheel[wlen] = *c;
-                        wlen += 1;
-                    }
-                }
-                if has_ace && wlen == 4 {
-                    let ace = suited
-                        .iter()
-                        .find(|c| c.number() == CardNumber::Ace)
-                        .unwrap();
-                    return Some(FullHand(wheel[0], wheel[1], wheel[2], wheel[3], *ace));
-                }
-            }
-        }
-        None
-    }
-
-    /// Four of a Kind (Poker): 4 cards of the same rank
-    fn try_poker(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
-
-        for num in get_all_numbers().into_iter().rev() {
-            let mut quads = [Card(CardNumber::Two, CardSuit::Diamonds); 4];
-            let mut qlen = 0;
-            for c in sorted.iter().filter(|c| c.number() == num) {
-                if qlen < 4 {
-                    quads[qlen] = *c;
-                    qlen += 1;
-                }
-            }
-            if qlen == 4 {
-                let kicker = sorted.iter().find(|c| c.number() != num).copied()?;
-                return Some(FullHand(quads[0], quads[1], quads[2], quads[3], kicker));
-            }
-        }
-        None
-    }
-
-    /// Full House: 3 of a kind + a pair
-    fn try_full_house(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
-
-        for trio_num in get_all_numbers().into_iter().rev() {
-            let mut trio = [Card(CardNumber::Two, CardSuit::Diamonds); 3];
-            let mut tlen = 0;
-            for c in sorted.iter().filter(|c| c.number() == trio_num) {
-                if tlen < 3 {
-                    trio[tlen] = *c;
-                    tlen += 1;
-                }
-            }
-            if tlen >= 3 {
-                for pair_num in get_all_numbers().into_iter().rev() {
-                    if pair_num == trio_num {
-                        continue;
-                    }
-                    let mut pair = [Card(CardNumber::Two, CardSuit::Diamonds); 2];
-                    let mut plen = 0;
-                    for c in sorted.iter().filter(|c| c.number() == pair_num) {
-                        if plen < 2 {
-                            pair[plen] = *c;
-                            plen += 1;
-                        }
-                    }
-                    if plen >= 2 {
-                        return Some(FullHand(trio[0], trio[1], trio[2], pair[0], pair[1]));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Flush (Color): 5 cards of the same suit
-    fn try_flush(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let cards = &cards_arr[..cards_len];
-        for suit in CardSuit::ALL {
-            let mut suited = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
-            let mut slen = 0;
-            for c in cards.iter().filter(|c| c.suit() == suit) {
-                suited[slen] = *c;
-                slen += 1;
-            }
-            if slen >= 5 {
-                let suited = &mut suited[..slen];
-                suited.sort_by_key(|c| std::cmp::Reverse(c.number()));
-                return Some(FullHand(
-                    suited[0], suited[1], suited[2], suited[3], suited[4],
-                ));
-            }
-        }
-        None
-    }
-
-    /// Straight: 5 consecutive cards
-    fn try_straight(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted_arr = cards_arr;
-        let sorted_slice = &mut sorted_arr[..cards_len];
-        sorted_slice.sort_by_key(|c| std::cmp::Reverse(c.number()));
-        // Manual dedup by rank
-        let mut deduped = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
-        let mut slen = 0;
-        for i in 0..cards_len {
-            if slen == 0 || sorted_slice[i].number() != deduped[slen - 1].number() {
-                deduped[slen] = sorted_slice[i];
-                slen += 1;
-            }
-        }
-        let sorted = &deduped[..slen];
-
-        if slen >= 5 {
-            for window in sorted.windows(5) {
-                let nums = [
-                    window[0].number(),
-                    window[1].number(),
-                    window[2].number(),
-                    window[3].number(),
-                    window[4].number(),
-                ];
-                if is_consecutive(&nums) {
-                    return Some(FullHand(
-                        window[0], window[1], window[2], window[3], window[4],
-                    ));
-                }
-            }
-            // Check for wheel (A-2-3-4-5)
-            let has_ace = sorted.iter().any(|c| c.number() == CardNumber::Ace);
-            let mut wheel = [Card(CardNumber::Two, CardSuit::Diamonds); 4];
-            let mut wlen = 0;
-            for c in sorted.iter().filter(|c| {
-                matches!(
-                    c.number(),
-                    CardNumber::Two | CardNumber::Three | CardNumber::Four | CardNumber::Five
-                )
-            }) {
-                if wlen < 4 {
-                    wheel[wlen] = *c;
-                    wlen += 1;
-                }
-            }
-            if has_ace && wlen == 4 {
-                let ace = sorted
-                    .iter()
-                    .find(|c| c.number() == CardNumber::Ace)
-                    .unwrap();
-                return Some(FullHand(wheel[0], wheel[1], wheel[2], wheel[3], *ace));
-            }
-        }
-        None
-    }
-
-    /// Three of a Kind (Trio): 3 cards of the same rank
-    fn try_trio(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
-
-        for num in get_all_numbers().into_iter().rev() {
-            let mut trio = [Card(CardNumber::Two, CardSuit::Diamonds); 3];
-            let mut tlen = 0;
-            for c in sorted.iter().filter(|c| c.number() == num) {
-                if tlen < 3 {
-                    trio[tlen] = *c;
-                    tlen += 1;
-                }
-            }
-            if tlen == 3 {
-                let mut kickers = [Card(CardNumber::Two, CardSuit::Diamonds); 2];
-                let mut klen = 0;
-                for c in sorted.iter().filter(|c| c.number() != num) {
-                    if klen < 2 {
-                        kickers[klen] = *c;
-                        klen += 1;
-                    }
-                }
-                if klen >= 2 {
-                    return Some(FullHand(trio[0], trio[1], trio[2], kickers[0], kickers[1]));
-                }
-            }
-        }
-        None
-    }
-
-    /// Two Pair: 2 different pairs
-    fn try_doubles(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
-
-        // At most 3 pairs possible in 7 cards; store up to 3 × 2 cards.
-        let mut pairs = [[Card(CardNumber::Two, CardSuit::Diamonds); 2]; 3];
-        let mut pair_count = 0;
-        for num in get_all_numbers().into_iter().rev() {
-            let mut buf = [Card(CardNumber::Two, CardSuit::Diamonds); 2];
-            let mut blen = 0;
-            for c in sorted.iter().filter(|c| c.number() == num) {
-                if blen < 2 {
-                    buf[blen] = *c;
-                    blen += 1;
-                }
-            }
-            if blen >= 2 && pair_count < 3 {
-                pairs[pair_count] = buf;
-                pair_count += 1;
-            }
-        }
-
-        if pair_count >= 2 {
-            let kicker = sorted
-                .iter()
-                .find(|c| {
-                    c.number() != pairs[0][0].number() && c.number() != pairs[1][0].number()
-                })
-                .copied()?;
-            return Some(FullHand(
-                pairs[0][0],
-                pairs[0][1],
-                pairs[1][0],
-                pairs[1][1],
-                kicker,
-            ));
-        }
-        None
-    }
-
-    /// One Pair: 2 cards of the same rank
-    fn try_pair(&self, board: &Board) -> Option<FullHand> {
-        let (cards_arr, cards_len) = self.all_cards(board);
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
-        sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
-
-        for num in get_all_numbers().into_iter().rev() {
-            let mut pair = [Card(CardNumber::Two, CardSuit::Diamonds); 2];
-            let mut plen = 0;
-            for c in sorted.iter().filter(|c| c.number() == num) {
-                if plen < 2 {
-                    pair[plen] = *c;
-                    plen += 1;
-                }
-            }
-            if plen >= 2 {
-                let mut kickers = [Card(CardNumber::Two, CardSuit::Diamonds); 3];
-                let mut klen = 0;
-                for c in sorted.iter().filter(|c| c.number() != num) {
-                    if klen < 3 {
-                        kickers[klen] = *c;
-                        klen += 1;
-                    }
-                }
-                if klen >= 3 {
-                    return Some(FullHand(
-                        pair[0], pair[1], kickers[0], kickers[1], kickers[2],
-                    ));
-                }
-            }
-        }
-        None
-    }
-
-    /// High Card: Best 5 cards when no other hand is made
-    fn try_high_card(&self, board: &Board) -> Option<FullHand> {
         let (cards_arr, cards_len) = self.all_cards(board);
         if cards_len < 5 {
             return None;
         }
-        let mut sorted = cards_arr;
-        let sorted = &mut sorted[..cards_len];
+
+        // === One sort for all hand types ===
+        let mut sorted_arr = cards_arr;
+        let sorted = &mut sorted_arr[..cards_len];
         sorted.sort_by_key(|c| std::cmp::Reverse(c.number()));
+
+        // === Single pass: build rank counts, suit counts, and bitmasks ===
+        let mut rank_count = [0u8; 15]; // indexed by rank value 2..=14
+        let mut suit_count = [0u8; 4]; // indexed by suit ordinal
+        let mut suit_rank_bits = [0u16; 4]; // rank bitmask per suit
+        let mut all_rank_bits: u16 = 0;
+
+        for card in sorted.iter() {
+            let r = card.number() as usize;
+            let s = suit_ordinal(card.suit());
+            rank_count[r] += 1;
+            suit_count[s] += 1;
+            suit_rank_bits[s] |= 1 << r;
+            all_rank_bits |= 1 << r;
+        }
+
+        // === Classify groups (iterate high-to-low for best-first ordering) ===
+        let mut quads_rank: Option<CardNumber> = None;
+        let mut trips_rank: [Option<CardNumber>; 2] = [None; 2];
+        let mut trips_count = 0usize;
+        let mut pair_rank: [Option<CardNumber>; 3] = [None; 3];
+        let mut pair_count = 0usize;
+
+        for r in (2..=14usize).rev() {
+            match rank_count[r] {
+                4 => {
+                    if quads_rank.is_none() {
+                        quads_rank = Some(rank_from_val(r));
+                    }
+                }
+                3 => {
+                    if trips_count < 2 {
+                        trips_rank[trips_count] = Some(rank_from_val(r));
+                        trips_count += 1;
+                    }
+                }
+                2 => {
+                    if pair_count < 3 {
+                        pair_rank[pair_count] = Some(rank_from_val(r));
+                        pair_count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // === Check for flush ===
+        let flush_suit_idx = suit_count.iter().position(|&c| c >= 5);
+
+        // --- Straight Flush / Royal Flush ---
+        if let Some(fsi) = flush_suit_idx
+            && let Some(high) = find_straight_high(suit_rank_bits[fsi])
+        {
+            let flush_suit = CardSuit::ALL[fsi];
+            return Some(Self::build_straight(sorted, high, Some(flush_suit)));
+        }
+
+        // --- Four of a Kind ---
+        if let Some(qr) = quads_rank {
+            return Some(Self::build_quads(sorted, qr));
+        }
+
+        // --- Full House (trips + pair, or two trips using second as pair) ---
+        if trips_count >= 1 {
+            let tr = trips_rank[0].unwrap();
+            let pair_r = if trips_count >= 2 {
+                trips_rank[1]
+            } else if pair_count >= 1 {
+                pair_rank[0]
+            } else {
+                None
+            };
+            if let Some(pr) = pair_r {
+                return Some(Self::build_full_house(sorted, tr, pr));
+            }
+        }
+
+        // --- Flush ---
+        if let Some(fsi) = flush_suit_idx {
+            let flush_suit = CardSuit::ALL[fsi];
+            return Some(Self::build_flush(sorted, flush_suit));
+        }
+
+        // --- Straight ---
+        if let Some(high) = find_straight_high(all_rank_bits) {
+            return Some(Self::build_straight(sorted, high, None));
+        }
+
+        // --- Three of a Kind ---
+        if trips_count >= 1 {
+            let tr = trips_rank[0].unwrap();
+            return Some(Self::build_trips(sorted, tr));
+        }
+
+        // --- Two Pair ---
+        if pair_count >= 2 {
+            return Some(Self::build_two_pair(
+                sorted,
+                pair_rank[0].unwrap(),
+                pair_rank[1].unwrap(),
+            ));
+        }
+
+        // --- One Pair ---
+        if pair_count == 1 {
+            return Some(Self::build_one_pair(sorted, pair_rank[0].unwrap()));
+        }
+
+        // --- High Card ---
         Some(FullHand(
             sorted[0], sorted[1], sorted[2], sorted[3], sorted[4],
         ))
     }
+
+    // === Build helpers — each constructs the optimal FullHand for its type ===
+
+    /// Build a straight (or straight flush if `suit` is Some).
+    #[inline]
+    fn build_straight(sorted: &[Card], high: CardNumber, suit: Option<CardSuit>) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let suit_filter = |c: &&Card| suit.is_none_or(|s| c.suit() == s);
+        if high == CardNumber::Five {
+            // Wheel: 5-4-3-2-A
+            let ranks = [
+                CardNumber::Five,
+                CardNumber::Four,
+                CardNumber::Three,
+                CardNumber::Two,
+                CardNumber::Ace,
+            ];
+            for (i, &r) in ranks.iter().enumerate() {
+                result[i] = *sorted
+                    .iter()
+                    .find(|c| c.number() == r && suit_filter(c))
+                    .unwrap();
+            }
+        } else {
+            let hv = high as i32;
+            for i in 0..5i32 {
+                let target = rank_from_val((hv - i) as usize);
+                result[i as usize] = *sorted
+                    .iter()
+                    .find(|c| c.number() == target && suit_filter(c))
+                    .unwrap();
+            }
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_quads(sorted: &[Card], quad_rank: CardNumber) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let mut idx = 0;
+        for c in sorted.iter().filter(|c| c.number() == quad_rank) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        if let Some(c) = sorted.iter().find(|c| c.number() != quad_rank) {
+            result[idx] = *c;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_full_house(sorted: &[Card], trips: CardNumber, pair: CardNumber) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let mut idx = 0;
+        for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        for c in sorted.iter().filter(|c| c.number() == pair).take(2) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_flush(sorted: &[Card], suit: CardSuit) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        for (idx, c) in sorted.iter().filter(|c| c.suit() == suit).take(5).enumerate() {
+            result[idx] = *c;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_trips(sorted: &[Card], trips: CardNumber) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let mut idx = 0;
+        for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        for c in sorted.iter().filter(|c| c.number() != trips).take(2) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_two_pair(sorted: &[Card], p1: CardNumber, p2: CardNumber) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let mut idx = 0;
+        for c in sorted.iter().filter(|c| c.number() == p1).take(2) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        for c in sorted.iter().filter(|c| c.number() == p2).take(2) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        for c in sorted
+            .iter()
+            .filter(|c| c.number() != p1 && c.number() != p2)
+            .take(1)
+        {
+            result[idx] = *c;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
+
+    #[inline]
+    fn build_one_pair(sorted: &[Card], pair: CardNumber) -> FullHand {
+        let mut result = [sorted[0]; 5];
+        let mut idx = 0;
+        for c in sorted.iter().filter(|c| c.number() == pair).take(2) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        for c in sorted.iter().filter(|c| c.number() != pair).take(3) {
+            result[idx] = *c;
+            idx += 1;
+        }
+        FullHand(result[0], result[1], result[2], result[3], result[4])
+    }
 }
 
-/// Helper function to check if card numbers are consecutive
-fn is_consecutive(numbers: &[CardNumber]) -> bool {
-    if numbers.len() < 2 {
-        return true;
+/// Bitmask for the wheel straight (A-5-4-3-2).
+const WHEEL_MASK: u16 = (1 << 14) | (1 << 5) | (1 << 4) | (1 << 3) | (1 << 2);
+/// Bitmask for a royal flush (A-K-Q-J-T).
+const ROYAL_MASK: u16 = (1 << 14) | (1 << 13) | (1 << 12) | (1 << 11) | (1 << 10);
+
+/// Convert a CardSuit to a 0–3 index for array lookups.
+#[inline]
+fn suit_ordinal(suit: CardSuit) -> usize {
+    match suit {
+        CardSuit::Diamonds => 0,
+        CardSuit::Spades => 1,
+        CardSuit::Clubs => 2,
+        CardSuit::Hearts => 3,
     }
-    for i in 0..numbers.len() - 1 {
-        if (numbers[i] as i32) - (numbers[i + 1] as i32) != 1 {
-            return false;
+}
+
+/// Convert a rank integer (2..=14) back to a CardNumber.
+#[inline]
+fn rank_from_val(val: usize) -> CardNumber {
+    CardNumber::ALL[val - 2]
+}
+
+/// Find the highest straight in a rank bitmask (bit *r* set ⇔ rank *r* present).
+/// Returns the high card of the straight, or `CardNumber::Five` for a wheel.
+#[inline]
+fn find_straight_high(rank_bits: u16) -> Option<CardNumber> {
+    // Check 5-wide windows from Ace-high (14) down to Six-high (6).
+    for high in (6u32..=14).rev() {
+        let mask: u16 = 0x1F << (high - 4);
+        if rank_bits & mask == mask {
+            return Some(rank_from_val(high as usize));
         }
     }
-    true
+    // Wheel: A-5-4-3-2
+    if rank_bits & WHEEL_MASK == WHEEL_MASK {
+        return Some(CardNumber::Five);
+    }
+    None
 }
 
 /// Helper function to get all card numbers.
@@ -848,30 +739,70 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
     let mut losses = 0;
     let mut rng = rng();
 
-    // Identify known cards
-    let mut known_cards = vec![hero.0, hero.1];
+    // Identify known cards (stack-allocated)
+    let mut known = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
+    known[0] = hero.0;
+    known[1] = hero.1;
     let (bc, blen) = board.cards();
-    known_cards.extend_from_slice(&bc[..blen]);
+    known[2..2 + blen].copy_from_slice(&bc[..blen]);
+    let known_len = 2 + blen;
 
+    // Pre-build the deck template once (stack-allocated, zero heap alloc)
     let all_cards = get_all_cards();
+    let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
+    let mut deck_size = 0;
+    for c in &all_cards {
+        if !known[..known_len].contains(c) {
+            deck_template[deck_size] = *c;
+            deck_size += 1;
+        }
+    }
+
+    // How many random cards we need per iteration:
+    // 2 (villain) + missing board cards
+    let board_missing = 5 - blen;
+    let cards_needed = 2 + board_missing;
 
     for _ in 0..iterations {
-        // Create deck excluding known cards
-        let mut deck: Vec<Card> = all_cards
-            .iter()
-            .filter(|c| !known_cards.contains(c))
-            .copied()
-            .collect();
+        // Copy template (stack → stack, no heap)
+        let mut deck = deck_template;
 
-        deck.shuffle(&mut rng);
+        // Partial Fisher-Yates: only randomise the positions we actually deal
+        for i in 0..cards_needed {
+            let j = rng.random_range(i..deck_size);
+            deck.swap(i, j);
+        }
 
-        // Deal villain
-        let v1 = deck.pop().unwrap();
-        let v2 = deck.pop().unwrap();
-        let villain = Hand(v1, v2);
+        // Deal villain from first 2 positions
+        let villain = Hand(deck[0], deck[1]);
 
-        // Fill board
-        let sim_board = board.fill_from_deck(&mut deck);
+        // Build simulated board from positions 2..
+        let mut di = 2;
+        let sim_flop = match board.flop {
+            Some(f) => f,
+            None => {
+                let f = (deck[di], deck[di + 1], deck[di + 2]);
+                di += 3;
+                f
+            }
+        };
+        let sim_turn = match board.turn {
+            Some(t) => t,
+            None => {
+                let t = deck[di];
+                di += 1;
+                t
+            }
+        };
+        let sim_river = match board.river {
+            Some(r) => r,
+            None => deck[di],
+        };
+        let sim_board = Board {
+            flop: Some(sim_flop),
+            turn: Some(sim_turn),
+            river: Some(sim_river),
+        };
 
         match determine_winner(hero, &villain, &sim_board) {
             Some(Winner::Hand1) => wins += 1,
@@ -902,28 +833,76 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
     let mut ties: Vec<usize> = vec![0; hands.len()];
     let mut rng = rng();
 
-    // Identify known cards (all hands + board)
-    let mut known_cards: Vec<Card> = hands.iter().flat_map(|h| [h.0, h.1]).collect();
+    // Identify known cards (stack-allocated — max 23 cards: 9 players × 2 + 5 board)
+    let mut known = [Card(CardNumber::Two, CardSuit::Diamonds); 23];
+    let mut known_len = 0;
+    for h in hands {
+        known[known_len] = h.0;
+        known[known_len + 1] = h.1;
+        known_len += 2;
+    }
     let (bc, blen) = board.cards();
-    known_cards.extend_from_slice(&bc[..blen]);
+    known[known_len..known_len + blen].copy_from_slice(&bc[..blen]);
+    known_len += blen;
 
+    // Pre-build the deck template once
     let all_cards = get_all_cards();
+    let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
+    let mut deck_size = 0;
+    for c in &all_cards {
+        if !known[..known_len].contains(c) {
+            deck_template[deck_size] = *c;
+            deck_size += 1;
+        }
+    }
+
+    // Only need to deal missing board cards (all player hands are known)
+    let board_missing = 5 - blen;
+
+    // Pre-allocate per-iteration scratch (avoids Vec allocation in the hot loop)
+    let num_hands = hands.len();
+    let mut best_hands = Vec::with_capacity(num_hands);
+    let mut winner_indices = Vec::with_capacity(num_hands);
 
     for _ in 0..iterations {
-        // Create deck excluding known cards
-        let mut deck: Vec<Card> = all_cards
-            .iter()
-            .filter(|c| !known_cards.contains(c))
-            .copied()
-            .collect();
+        let mut deck = deck_template;
 
-        deck.shuffle(&mut rng);
+        // Partial Fisher-Yates for board cards only
+        for i in 0..board_missing {
+            let j = rng.random_range(i..deck_size);
+            deck.swap(i, j);
+        }
 
-        // Fill board
-        let sim_board = board.fill_from_deck(&mut deck);
+        // Build simulated board
+        let mut di = 0;
+        let sim_flop = match board.flop {
+            Some(f) => f,
+            None => {
+                let f = (deck[di], deck[di + 1], deck[di + 2]);
+                di += 3;
+                f
+            }
+        };
+        let sim_turn = match board.turn {
+            Some(t) => t,
+            None => {
+                let t = deck[di];
+                di += 1;
+                t
+            }
+        };
+        let sim_river = match board.river {
+            Some(r) => r,
+            None => deck[di],
+        };
+        let sim_board = Board {
+            flop: Some(sim_flop),
+            turn: Some(sim_turn),
+            river: Some(sim_river),
+        };
 
         // Evaluate all hands and find winner(s)
-        let mut best_hands: Vec<(usize, FullHand)> = Vec::new();
+        best_hands.clear();
         for (i, hand) in hands.iter().enumerate() {
             if let Some(full_hand) = hand.best(&sim_board) {
                 best_hands.push((i, full_hand));
@@ -935,24 +914,21 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
         }
 
         // Find the best hand(s)
-        let mut winner_indices: Vec<usize> = vec![best_hands[0].0];
+        winner_indices.clear();
+        winner_indices.push(best_hands[0].0);
         let mut best = &best_hands[0].1;
 
         for (i, full_hand) in best_hands.iter().skip(1) {
             match full_hand.compare(best) {
                 Winner::Hand1 => {
-                    // This hand is better
                     winner_indices.clear();
                     winner_indices.push(*i);
                     best = full_hand;
                 }
                 Winner::Tie => {
-                    // Tie with current best
                     winner_indices.push(*i);
                 }
-                Winner::Hand2 => {
-                    // Current best is still better
-                }
+                Winner::Hand2 => {}
             }
         }
 
