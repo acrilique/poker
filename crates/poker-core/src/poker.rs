@@ -83,6 +83,23 @@ pub enum CardNumber {
 }
 
 impl CardNumber {
+    /// All ranks in ascending order.
+    pub const ALL: [CardNumber; 13] = [
+        CardNumber::Two,
+        CardNumber::Three,
+        CardNumber::Four,
+        CardNumber::Five,
+        CardNumber::Six,
+        CardNumber::Seven,
+        CardNumber::Eight,
+        CardNumber::Nine,
+        CardNumber::Ten,
+        CardNumber::Jack,
+        CardNumber::Queen,
+        CardNumber::King,
+        CardNumber::Ace,
+    ];
+
     /// Returns the rank as a display character
     pub fn symbol(&self) -> &'static str {
         match self {
@@ -663,23 +680,12 @@ fn is_consecutive(numbers: &[CardNumber]) -> bool {
     true
 }
 
-/// Helper function to get all card numbers
-pub fn get_all_numbers() -> Vec<CardNumber> {
-    vec![
-        CardNumber::Two,
-        CardNumber::Three,
-        CardNumber::Four,
-        CardNumber::Five,
-        CardNumber::Six,
-        CardNumber::Seven,
-        CardNumber::Eight,
-        CardNumber::Nine,
-        CardNumber::Ten,
-        CardNumber::Jack,
-        CardNumber::Queen,
-        CardNumber::King,
-        CardNumber::Ace,
-    ]
+/// Helper function to get all card numbers.
+///
+/// Returns [`CardNumber::ALL`] by value (13-byte `Copy` array, no heap allocation).
+#[inline]
+pub fn get_all_numbers() -> [CardNumber; 13] {
+    CardNumber::ALL
 }
 
 pub fn get_all_cards() -> Vec<Card> {
