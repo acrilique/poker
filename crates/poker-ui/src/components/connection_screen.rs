@@ -185,7 +185,7 @@ pub fn ConnectionScreen(
                     div { class: "flex flex-col gap-1",
                         label { class: "text-sm text-foreground/60", "Player name" }
                         input {
-                            class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent",
+                            class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent",
                             r#type: "text",
                             maxlength: "{MAX_NAME_LEN}",
                             placeholder: "Enter your name",
@@ -198,7 +198,7 @@ pub fn ConnectionScreen(
                     div { class: "flex flex-col gap-1",
                         label { class: "text-sm text-foreground/60", "Room ID" }
                         input {
-                            class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent",
+                            class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent",
                             r#type: "text",
                             placeholder: "room42",
                             value: "{room_id}",
@@ -231,7 +231,7 @@ pub fn ConnectionScreen(
                             },
                             div {
                                 input {
-                                    class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
+                                    class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
                                     r#type: "text",
                                     value: "{server_url}",
                                     oninput: move |e| server_url.set(e.value()),
@@ -267,7 +267,7 @@ pub fn ConnectionScreen(
                                 div { class: "flex-1 flex flex-col gap-1",
                                     label { class: "text-sm text-foreground/60", "Initial stack" }
                                     input {
-                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
+                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
                                         r#type: "number",
                                         min: "1",
                                         value: "{starting_bbs_input}",
@@ -280,7 +280,7 @@ pub fn ConnectionScreen(
                                 div { class: "flex-1 flex flex-col gap-1",
                                     label { class: "text-sm text-foreground/60", "Blind interval" }
                                     input {
-                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
+                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
                                         r#type: "number",
                                         min: "0",
                                         placeholder: "0",
@@ -294,7 +294,7 @@ pub fn ConnectionScreen(
                                 div { class: "flex-1 flex flex-col gap-1",
                                     label { class: "text-sm text-foreground/60", "Blind rise" }
                                     input {
-                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-accent w-full",
+                                        class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
                                         r#type: "number",
                                         min: "0",
                                         placeholder: "0",
