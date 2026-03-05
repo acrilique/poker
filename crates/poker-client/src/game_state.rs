@@ -60,6 +60,8 @@ pub struct ShowdownHand {
     pub hand_rank: Option<String>,
     /// Win+tie equity percentage (0–100). Present on all-in showdown.
     pub equity: Option<f64>,
+    /// Chips won in this round (set when `RoundWinner` arrives).
+    pub chips_won: Option<u32>,
 }
 
 /// Semantic category for log/event messages. The UI layer decides how to style each.
@@ -651,6 +653,7 @@ impl ClientGameState {
                         cards: *cards,
                         hand_rank: Some(rank.clone()),
                         equity: None,
+                        chips_won: None,
                     })
                     .collect();
                 self.add_event(GameEvent::Showdown {
@@ -676,6 +679,7 @@ impl ClientGameState {
                         cards: *cards,
                         hand_rank: None,
                         equity: Some(*eq),
+                        chips_won: None,
                     })
                     .collect();
                 self.add_event(GameEvent::AllInShowdown {
@@ -686,6 +690,15 @@ impl ClientGameState {
             }
             ServerMessage::RoundWinner { winners } => {
                 for (player_id, amount, hand) in winners {
+                    // Tag the showdown hand with chips won for visual display.
+                    if let Some(sh) = self
+                        .showdown_hands
+                        .iter_mut()
+                        .find(|h| h.player_id == *player_id)
+                    {
+                        let prev = sh.chips_won.unwrap_or(0);
+                        sh.chips_won = Some(prev + amount);
+                    }
                     self.add_event(GameEvent::RoundWinner {
                         player_id: *player_id,
                         name: self.player_name(*player_id),
@@ -693,6 +706,7 @@ impl ClientGameState {
                         hand: hand.clone(),
                     });
                 }
+                changed.cards = true;
             }
             ServerMessage::PlayerEliminated { player_id } => {
                 self.add_event(GameEvent::PlayerEliminated {

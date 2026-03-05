@@ -114,6 +114,17 @@ pub fn GameTable(state: Signal<ClientGameState>) -> Element {
                                             "{equity:.1}%"
                                         }
                                     }
+                                    // Chips won indicator
+                                    if let Some(won) = hand.chips_won {
+                                        {
+                                            let won_text = format!("+{}", format_stack(won, bb, mode));
+                                            rsx! {
+                                                span { class: "text-xs font-bold text-green-400 leading-tight",
+                                                    "{won_text}"
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
