@@ -886,3 +886,513 @@ impl GameState {
         actions
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use poker_core::poker::{Card, CardNumber, CardSuit};
+    use poker_core::protocol::ServerMessage;
+
+    fn setup_game(
+        players: Vec<(u32, &str, u32, PlayerStatus, Option<(Card, Card)>, u32)>,
+        community: Vec<Card>,
+    ) -> GameState {
+        let mut gs = GameState::new();
+        gs.phase = GamePhase::Showdown;
+        for (id, name, chips, status, hole_cards, contribution) in players {
+            gs.players.insert(
+                id,
+                Player {
+                    id,
+                    name: name.to_string(),
+                    chips,
+                    status,
+                    hole_cards,
+                    current_bet: 0,
+                    sitting_out: false,
+                },
+            );
+            gs.player_order.push(id);
+            if contribution > 0 {
+                gs.pot_contributions.insert(id, contribution);
+                gs.pot += contribution;
+            }
+        }
+        gs.community_cards = community;
+        gs
+    }
+
+    /// Board: T♠ J♠ Q♠ K♠ 2♦ — enables Royal Flush with A♠, Straight Flush with 9♠, Straight with any Ace.
+    fn standard_board() -> Vec<Card> {
+        vec![
+            Card(CardNumber::Ten, CardSuit::Spades),
+            Card(CardNumber::Jack, CardSuit::Spades),
+            Card(CardNumber::Queen, CardSuit::Spades),
+            Card(CardNumber::King, CardSuit::Spades),
+            Card(CardNumber::Two, CardSuit::Diamonds),
+        ]
+    }
+
+    /// Board: A♠ K♠ Q♠ J♠ T♠ — Royal Flush on board, every player ties.
+    fn tie_board() -> Vec<Card> {
+        vec![
+            Card(CardNumber::Ace, CardSuit::Spades),
+            Card(CardNumber::King, CardSuit::Spades),
+            Card(CardNumber::Queen, CardSuit::Spades),
+            Card(CardNumber::Jack, CardSuit::Spades),
+            Card(CardNumber::Ten, CardSuit::Spades),
+        ]
+    }
+
+    /// With standard_board → Royal Flush (A♠ K♠ Q♠ J♠ T♠).
+    fn royal_flush_hand() -> (Card, Card) {
+        (
+            Card(CardNumber::Ace, CardSuit::Spades),
+            Card(CardNumber::Three, CardSuit::Clubs),
+        )
+    }
+
+    /// With standard_board → Straight Flush K-high (K♠ Q♠ J♠ T♠ 9♠).
+    fn straight_flush_hand() -> (Card, Card) {
+        (
+            Card(CardNumber::Nine, CardSuit::Spades),
+            Card(CardNumber::Three, CardSuit::Hearts),
+        )
+    }
+
+    /// With standard_board → Ace-high Straight (A K Q J T, not flush).
+    fn straight_hand() -> (Card, Card) {
+        (
+            Card(CardNumber::Ace, CardSuit::Hearts),
+            Card(CardNumber::Three, CardSuit::Hearts),
+        )
+    }
+
+    /// With standard_board → High card (K Q J T 6).
+    fn low_hand() -> (Card, Card) {
+        (
+            Card(CardNumber::Four, CardSuit::Hearts),
+            Card(CardNumber::Six, CardSuit::Clubs),
+        )
+    }
+
+    /// With standard_board → High card (K Q J T 8), slightly better than low_hand.
+    fn low_hand2() -> (Card, Card) {
+        (
+            Card(CardNumber::Seven, CardSuit::Hearts),
+            Card(CardNumber::Eight, CardSuit::Clubs),
+        )
+    }
+
+    fn find_round_winner(msgs: &[ServerMessage]) -> &Vec<(u32, u32, String)> {
+        msgs.iter()
+            .find_map(|m| match m {
+                ServerMessage::RoundWinner { winners } => Some(winners),
+                _ => None,
+            })
+            .expect("expected RoundWinner message")
+    }
+
+    fn has_showdown(msgs: &[ServerMessage]) -> bool {
+        msgs.iter()
+            .any(|m| matches!(m, ServerMessage::Showdown { .. }))
+    }
+
+    fn player_winnings(winners: &[(u32, u32, String)], player_id: u32) -> u32 {
+        winners
+            .iter()
+            .filter(|(id, _, _)| *id == player_id)
+            .map(|(_, amount, _)| *amount)
+            .sum()
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1: No side pot — single winner
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_no_side_pot_single_winner() {
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (2, "Bob", 0, PlayerStatus::Active, Some(low_hand()), 100),
+                (
+                    3,
+                    "Charlie",
+                    0,
+                    PlayerStatus::Active,
+                    Some(low_hand2()),
+                    100,
+                ),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 300);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 300);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 300);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 0);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: Short-stack all-in wins the main pot
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_short_stack_allin_wins_main_pot() {
+        // A(AllIn,50) best hand, B(Active,100) second-best, C(Active,100) worst.
+        // Main pot  = 50×3 = 150 → A
+        // Side pot  = 50×2 = 100 → B
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::AllIn,
+                    Some(royal_flush_hand()),
+                    50,
+                ),
+                (
+                    2,
+                    "Bob",
+                    0,
+                    PlayerStatus::Active,
+                    Some(straight_flush_hand()),
+                    100,
+                ),
+                (3, "Charlie", 0, PlayerStatus::Active, Some(low_hand()), 100),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 250);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 150);
+        assert_eq!(player_winnings(winners, 2), 100);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 150);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 100);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: Active player wins everything (main + side)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_active_player_wins_all_pots() {
+        // B has the best hand → sweeps both pots for 250.
+        let mut gs = setup_game(
+            vec![
+                (1, "Alice", 0, PlayerStatus::AllIn, Some(low_hand()), 50),
+                (
+                    2,
+                    "Bob",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (
+                    3,
+                    "Charlie",
+                    0,
+                    PlayerStatus::Active,
+                    Some(low_hand2()),
+                    100,
+                ),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 250);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 2), 250);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 0);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 250);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4: Two all-ins at different levels → three tiers
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_two_allin_different_levels() {
+        // A(AllIn,25) Royal Flush, B(AllIn,50) SF K-high,
+        // C(Active,100) Ace-high straight, D(Active,100) high card.
+        // Tier 1: 25×4 = 100 → A   (best overall)
+        // Tier 2: 25×3 =  75 → B   (best among B,C,D)
+        // Tier 3: 50×2 = 100 → C   (best among C,D)
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::AllIn,
+                    Some(royal_flush_hand()),
+                    25,
+                ),
+                (
+                    2,
+                    "Bob",
+                    0,
+                    PlayerStatus::AllIn,
+                    Some(straight_flush_hand()),
+                    50,
+                ),
+                (
+                    3,
+                    "Charlie",
+                    0,
+                    PlayerStatus::Active,
+                    Some(straight_hand()),
+                    100,
+                ),
+                (4, "Diana", 0, PlayerStatus::Active, Some(low_hand()), 100),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 275);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 100);
+        assert_eq!(player_winnings(winners, 2), 75);
+        assert_eq!(player_winnings(winners, 3), 100);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 100);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 75);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 100);
+        assert_eq!(gs.players.get(&4).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5: Folded player's money stays in pot, not eligible to win
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_folded_player_money_in_pot() {
+        // A(Folded,100), B(Active,100) best hand, C(Active,100) worst.
+        // Single tier pot = 300. A ineligible → B wins all 300.
+        let mut gs = setup_game(
+            vec![
+                (1, "Alice", 0, PlayerStatus::Folded, None, 100),
+                (
+                    2,
+                    "Bob",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (3, "Charlie", 0, PlayerStatus::Active, Some(low_hand()), 100),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 300);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 2), 300);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 0);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 300);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: Dead money from multiple folded players → solo active wins all
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_dead_money_from_folded_players() {
+        // A(Folded,30), B(Folded,30), C(Active,100). Only C eligible.
+        // Pot = 160. C is the sole active player → solo-survivor path.
+        let mut gs = setup_game(
+            vec![
+                (1, "Alice", 0, PlayerStatus::Folded, None, 30),
+                (2, "Bob", 0, PlayerStatus::Folded, None, 30),
+                (
+                    3,
+                    "Charlie",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 160);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(
+            !has_showdown(&msgs),
+            "solo active player should not trigger showdown"
+        );
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 3), 160);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 160);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 7: Split pot — perfect tie (Royal Flush on board)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_split_pot_tie() {
+        let mut gs = setup_game(
+            vec![
+                (1, "Alice", 0, PlayerStatus::Active, Some(low_hand()), 100),
+                (2, "Bob", 0, PlayerStatus::Active, Some(low_hand2()), 100),
+            ],
+            tie_board(),
+        );
+        assert_eq!(gs.pot, 200);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 100);
+        assert_eq!(player_winnings(winners, 2), 100);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 100);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 100);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 8: Odd chip in split → lower player_id gets the extra chip
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_odd_chip_split() {
+        // P1(Active,100) and P2(Active,100) tie on tie_board.
+        // P3(Folded,1) adds 1 dead chip → pot = 201.
+        // Tier 1 (level 1): 1×3 = 3, eligible P1 & P2, tie → P1 gets 2, P2 gets 1.
+        // Tier 2 (level 100): 99×2 = 198, eligible P1 & P2, tie → 99 each.
+        // Totals: P1 = 101, P2 = 100.
+        let mut gs = setup_game(
+            vec![
+                (1, "Alice", 0, PlayerStatus::Active, Some(low_hand()), 100),
+                (2, "Bob", 0, PlayerStatus::Active, Some(low_hand2()), 100),
+                (3, "Charlie", 0, PlayerStatus::Folded, None, 1),
+            ],
+            tie_board(),
+        );
+        assert_eq!(gs.pot, 201);
+
+        let msgs = gs.resolve_hand();
+
+        let _winners = find_round_winner(&msgs);
+        let p1_chips = gs.players.get(&1).unwrap().chips;
+        let p2_chips = gs.players.get(&2).unwrap().chips;
+        assert_eq!(p1_chips + p2_chips, 201, "all chips must be distributed");
+        assert!(
+            p1_chips >= p2_chips,
+            "lower player_id should get the odd chip"
+        );
+        assert_eq!(p1_chips, 101);
+        assert_eq!(p2_chips, 100);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 9: Solo survivor — everyone else folded, no showdown
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_solo_survivor_everyone_folded() {
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (2, "Bob", 0, PlayerStatus::Folded, None, 100),
+                (3, "Charlie", 0, PlayerStatus::Folded, None, 50),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 250);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(
+            !has_showdown(&msgs),
+            "solo survivor should not trigger showdown"
+        );
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 250);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 250);
+        assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 10: All-in wins main pot, different active player wins side pot
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_allin_wins_main_active_wins_side() {
+        // A(AllIn,50) Royal Flush, B(Active,100) Ace-high straight, C(Active,100) high card.
+        // Main pot = 50×3 = 150 → A
+        // Side pot = 50×2 = 100 → B
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::AllIn,
+                    Some(royal_flush_hand()),
+                    50,
+                ),
+                (
+                    2,
+                    "Bob",
+                    0,
+                    PlayerStatus::Active,
+                    Some(straight_hand()),
+                    100,
+                ),
+                (3, "Charlie", 0, PlayerStatus::Active, Some(low_hand()), 100),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 250);
+
+        let msgs = gs.resolve_hand();
+
+        assert!(has_showdown(&msgs));
+        let winners = find_round_winner(&msgs);
+        assert_eq!(player_winnings(winners, 1), 150);
+        assert_eq!(player_winnings(winners, 2), 100);
+        assert_eq!(gs.players.get(&1).unwrap().chips, 150);
+        assert_eq!(gs.players.get(&2).unwrap().chips, 100);
+        assert_eq!(gs.players.get(&3).unwrap().chips, 0);
+        assert_eq!(gs.pot, 0);
+    }
+}
