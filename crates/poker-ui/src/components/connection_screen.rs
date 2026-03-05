@@ -207,39 +207,6 @@ pub fn ConnectionScreen(
                         p { class: "text-xs text-foreground/40", "Alphanumeric, up to 19 characters" }
                     }
 
-                    // Server address (collapsed by default)
-                    div { class: "flex flex-col gap-1",
-                        button {
-                            class: "text-sm text-foreground/60 flex items-center gap-1 hover:text-foreground/80 transition",
-                            r#type: "button",
-                            onclick: move |_| show_server.toggle(),
-                            "Server address"
-                            span {
-                                class: if *show_server.read() {
-                                    "text-xs transition-transform duration-150 rotate-180"
-                                } else {
-                                    "text-xs transition-transform duration-150"
-                                },
-                                "▾"
-                            }
-                        }
-                        div {
-                            class: if *show_server.read() {
-                                "collapsible collapsible-open"
-                            } else {
-                                "collapsible"
-                            },
-                            div {
-                                input {
-                                    class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
-                                    r#type: "text",
-                                    value: "{server_url}",
-                                    oninput: move |e| server_url.set(e.value()),
-                                }
-                            }
-                        }
-                    }
-
                     // Host settings (collapsed by default)
                     div { class: "flex flex-col gap-2",
                         button {
@@ -302,6 +269,39 @@ pub fn ConnectionScreen(
                                         oninput: move |e| blind_increase_pct.set(e.value()),
                                     }
                                     p { class: "text-xs text-foreground/40", "Percent" }
+                                }
+                            }
+                        }
+                    }
+
+                    // Server address (collapsed by default)
+                    div { class: "flex flex-col gap-1",
+                        button {
+                            class: "text-sm text-foreground/60 flex items-center gap-1 hover:text-foreground/80 transition",
+                            r#type: "button",
+                            onclick: move |_| show_server.toggle(),
+                            "Server address"
+                            span {
+                                class: if *show_server.read() {
+                                    "text-xs transition-transform duration-150 rotate-180"
+                                } else {
+                                    "text-xs transition-transform duration-150"
+                                },
+                                "▾"
+                            }
+                        }
+                        div {
+                            class: if *show_server.read() {
+                                "collapsible collapsible-open"
+                            } else {
+                                "collapsible"
+                            },
+                            div {
+                                input {
+                                    class: "bg-muted rounded-lg px-4 py-2 text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-accent w-full",
+                                    r#type: "text",
+                                    value: "{server_url}",
+                                    oninput: move |e| server_url.set(e.value()),
                                 }
                             }
                         }
