@@ -21,6 +21,6 @@ thiserror = "2"
 tokio-tungstenite = { version = "0.28", optional = true }
 futures-util = { version = "0.3", optional = true }
 gloo-net = { version = "0.6", optional = true, features = ["websocket"] }
-gloo-timers = { version = "0.3", optional = true, features = ["futures"] }
+gloo-timers = { version = "0.4", optional = true, features = ["futures"] }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 getrandom = { version = "0.4", optional = true, features = ["wasm_js"] }
