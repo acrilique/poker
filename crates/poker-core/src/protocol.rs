@@ -20,7 +20,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::poker::{Card, CardSuit};
+use crate::poker::Card;
 
 // ---------------------------------------------------------------------------
 // Structured wire-level error / enum types
@@ -41,11 +41,11 @@ pub enum Stage {
 impl fmt::Display for Stage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Stage::Preflop => "Preflop",
-            Stage::Flop => "Flop",
-            Stage::Turn => "Turn",
-            Stage::River => "River",
-            Stage::Showdown => "Showdown",
+            Self::Preflop => "Preflop",
+            Self::Flop => "Flop",
+            Self::Turn => "Turn",
+            Self::River => "River",
+            Self::Showdown => "Showdown",
         })
     }
 }
@@ -86,25 +86,25 @@ pub enum GameError {
 impl fmt::Display for GameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GameError::InvalidMessage { detail } => write!(f, "Invalid message: {detail}"),
-            GameError::NotInRoom => f.write_str("Must create or join a room first"),
-            GameError::AlreadyInRoom => f.write_str("Already in a room"),
-            GameError::GameNotStarted => f.write_str("Game not started"),
-            GameError::GameAlreadyStarted => f.write_str("Game already started"),
-            GameError::NotYourTurn => f.write_str("Not your turn"),
-            GameError::NotEnoughPlayers => f.write_str("Need at least 2 players to start"),
-            GameError::ActionNotAllowed { valid_actions } => {
+            Self::InvalidMessage { detail } => write!(f, "Invalid message: {detail}"),
+            Self::NotInRoom => f.write_str("Must create or join a room first"),
+            Self::AlreadyInRoom => f.write_str("Already in a room"),
+            Self::GameNotStarted => f.write_str("Game not started"),
+            Self::GameAlreadyStarted => f.write_str("Game already started"),
+            Self::NotYourTurn => f.write_str("Not your turn"),
+            Self::NotEnoughPlayers => f.write_str("Need at least 2 players to start"),
+            Self::ActionNotAllowed { valid_actions } => {
                 write!(f, "Invalid action. Valid: {valid_actions:?}")
             }
-            GameError::CannotCheck => f.write_str("Cannot check, must call or raise"),
-            GameError::InsufficientChips { have, need } => {
+            Self::CannotCheck => f.write_str("Cannot check, must call or raise"),
+            Self::InsufficientChips { have, need } => {
                 write!(f, "Not enough chips. Have {have}, need {need}")
             }
-            GameError::MinimumRaise { min_raise } => {
+            Self::MinimumRaise { min_raise } => {
                 write!(f, "Minimum raise is {min_raise}")
             }
-            GameError::PlayerNotFound => f.write_str("Player not found"),
-            GameError::NotHost => f.write_str("Only the host can perform this action"),
+            Self::PlayerNotFound => f.write_str("Player not found"),
+            Self::NotHost => f.write_str("Only the host can perform this action"),
         }
     }
 }
@@ -141,18 +141,18 @@ pub enum RoomErrorKind {
 impl fmt::Display for RoomErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RoomErrorKind::RoomIdEmpty => f.write_str("Room ID cannot be empty"),
-            RoomErrorKind::RoomIdTooLong => f.write_str("Room ID must be fewer than 20 characters"),
-            RoomErrorKind::RoomIdInvalidChars => f.write_str("Room ID must be alphanumeric"),
-            RoomErrorKind::ServerFull => f.write_str("Server room limit reached. Try again later"),
-            RoomErrorKind::RoomAlreadyExists { room_id } => {
+            Self::RoomIdEmpty => f.write_str("Room ID cannot be empty"),
+            Self::RoomIdTooLong => f.write_str("Room ID must be fewer than 20 characters"),
+            Self::RoomIdInvalidChars => f.write_str("Room ID must be alphanumeric"),
+            Self::ServerFull => f.write_str("Server room limit reached. Try again later"),
+            Self::RoomAlreadyExists { room_id } => {
                 write!(f, "Room '{room_id}' already exists")
             }
-            RoomErrorKind::RoomNotFound { room_id } => write!(f, "Room '{room_id}' not found"),
-            RoomErrorKind::RoomFull => f.write_str("Room is full"),
-            RoomErrorKind::GameInProgress => f.write_str("Game already in progress"),
-            RoomErrorKind::InvalidSession => f.write_str("Invalid or expired session token"),
-            RoomErrorKind::SessionExpired => f.write_str("Session expired — player was removed"),
+            Self::RoomNotFound { room_id } => write!(f, "Room '{room_id}' not found"),
+            Self::RoomFull => f.write_str("Room is full"),
+            Self::GameInProgress => f.write_str("Game already in progress"),
+            Self::InvalidSession => f.write_str("Invalid or expired session token"),
+            Self::SessionExpired => f.write_str("Session expired — player was removed"),
         }
     }
 }
@@ -165,24 +165,20 @@ pub struct CardInfo {
 }
 
 /// Convert an internal [`Card`] to the wire-level [`CardInfo`].
-pub fn card_to_info(card: &Card) -> CardInfo {
+#[must_use]
+pub const fn card_to_info(card: &Card) -> CardInfo {
     CardInfo {
-        rank: card.number() as u8,
-        suit: match card.suit() {
-            CardSuit::Diamonds => 0,
-            CardSuit::Spades => 1,
-            CardSuit::Clubs => 2,
-            CardSuit::Hearts => 3,
-        },
+        rank: card.number().value(),
+        suit: card.suit().value(),
     }
 }
 
 impl CardInfo {
     /// Convert this wire-level card into an internal [`Card`](crate::poker::Card).
-    pub fn to_card(self) -> crate::poker::Card {
+    #[must_use]
+    pub const fn to_card(self) -> crate::poker::Card {
         use crate::poker::{Card, CardNumber, CardSuit};
         let number = match self.rank {
-            2 => CardNumber::Two,
             3 => CardNumber::Three,
             4 => CardNumber::Four,
             5 => CardNumber::Five,
@@ -195,19 +191,21 @@ impl CardInfo {
             12 => CardNumber::Queen,
             13 => CardNumber::King,
             14 => CardNumber::Ace,
-            _ => CardNumber::Two, // fallback
+            // rank 2 and any out-of-range value fall back to Two.
+            _ => CardNumber::Two,
         };
         let suit = match self.suit {
-            0 => CardSuit::Diamonds,
             1 => CardSuit::Spades,
             2 => CardSuit::Clubs,
             3 => CardSuit::Hearts,
-            _ => CardSuit::Diamonds, // fallback
+            // suit 0 (Diamonds) and any out-of-range value fall back to Diamonds.
+            _ => CardSuit::Diamonds,
         };
         Card(number, suit)
     }
 
-    pub fn rank_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn rank_str(&self) -> &'static str {
         match self.rank {
             2 => "2",
             3 => "3",
@@ -226,7 +224,8 @@ impl CardInfo {
         }
     }
 
-    pub fn suit_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn suit_str(&self) -> &'static str {
         match self.suit {
             0 => "♦",
             1 => "♠",
@@ -265,13 +264,14 @@ pub enum PlayerAction {
 
 impl PlayerAction {
     /// Human-readable label for UI display.
-    pub fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            PlayerAction::Fold => "Fold",
-            PlayerAction::Check => "Check",
-            PlayerAction::Call => "Call",
-            PlayerAction::Raise => "Raise",
-            PlayerAction::AllIn => "All-In",
+            Self::Fold => "Fold",
+            Self::Check => "Check",
+            Self::Call => "Call",
+            Self::Raise => "Raise",
+            Self::AllIn => "All-In",
         }
     }
 }
@@ -297,12 +297,13 @@ pub struct BlindConfig {
 
 impl BlindConfig {
     /// Returns `true` when blind increases are enabled.
-    pub fn is_enabled(&self) -> bool {
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
         self.interval_secs > 0 && self.increase_percent > 0
     }
 }
 
-fn default_starting_bbs() -> u32 {
+const fn default_starting_bbs() -> u32 {
     100
 }
 
@@ -556,6 +557,12 @@ pub enum RoomIdError {
 /// Validate a room ID.
 ///
 /// Room IDs must be non-empty, alphanumeric, and fewer than 20 characters.
+///
+/// # Errors
+///
+/// Returns [`RoomIdError::Empty`] if `id` is empty, [`RoomIdError::TooLong`]
+/// if it has 20 or more characters, or [`RoomIdError::InvalidChars`] if it
+/// contains any non-ASCII-alphanumeric character.
 pub fn validate_room_id(id: &str) -> Result<(), RoomIdError> {
     if id.is_empty() {
         return Err(RoomIdError::Empty);

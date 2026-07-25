@@ -1,7 +1,0 @@
-[application]
-asset_dir = "assets"
-sub_package = "poker-web"
-
-[web.app]
-title = "Poker"
-base_path = "poker"

@@ -11,23 +11,18 @@ env:
 
 jobs:
   check:
-    name: Clippy, Test & Bench
+    name: Clippy & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-    
+
       - name: Print Rust version
         run: rustc -vV
 
-      - run: rustup target add wasm32-unknown-unknown
-
       - uses: Swatinem/rust-cache@v2
 
-      - name: Clippy (native)
-        run: cargo clippy --workspace --exclude poker-web -- -D warnings
-
-      - name: Clippy (poker-web / wasm)
-        run: cargo clippy -p poker-web --target wasm32-unknown-unknown -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Tests
         run: cargo test --workspace

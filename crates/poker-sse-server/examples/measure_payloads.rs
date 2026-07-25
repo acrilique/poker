@@ -157,6 +157,7 @@ fn report(samples: &[Sample]) {
     );
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     // Use deterministic hole cards / community so the size reflects a realistic
     // payload rather than RNG variance. We patch them in after make_state.

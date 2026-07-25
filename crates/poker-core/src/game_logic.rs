@@ -189,6 +189,7 @@ const fn next_seat(base: usize, offset: usize, seats: usize) -> usize {
 }
 
 impl GameState {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -237,6 +238,7 @@ impl GameState {
         Some(next)
     }
 
+    #[must_use]
     pub fn player_count(&self) -> usize {
         self.players.len()
     }
@@ -256,6 +258,7 @@ impl GameState {
     }
 
     /// Check whether the current player is sitting out.
+    #[must_use]
     pub fn is_current_player_sitting_out(&self) -> bool {
         self.current_player_id()
             .and_then(|id| self.players.get(&id))
@@ -263,6 +266,7 @@ impl GameState {
     }
 
     /// Get active players (not folded, not out).
+    #[must_use]
     pub fn active_player_count(&self) -> usize {
         self.players
             .values()
@@ -278,6 +282,7 @@ impl GameState {
         dead_code,
         reason = "used by the poker-sse-server crate; the WS server has no equivalent call site yet"
     )]
+    #[must_use]
     pub const fn is_game_over(&self) -> bool {
         // Note: no call site lives inside poker-core itself; both server crates
         // consume this from their transport layers.
@@ -285,6 +290,7 @@ impl GameState {
     }
 
     /// Get players who can still act (active but not all-in).
+    #[must_use]
     pub fn actionable_players(&self) -> Vec<u32> {
         self.player_order
             .iter()
@@ -454,11 +460,13 @@ impl GameState {
     }
 
     /// Get the current player's ID.
+    #[must_use]
     pub fn current_player_id(&self) -> Option<u32> {
         self.player_order.get(self.current_player_index).copied()
     }
 
     /// Check if betting round is complete.
+    #[must_use]
     pub fn is_betting_complete(&self) -> bool {
         let actionable = self.actionable_players();
 
@@ -889,8 +897,9 @@ impl GameState {
 
         let remaining: Vec<&Player> = self.players.values().filter(|p| p.chips > 0).collect();
 
-        if remaining.len() == 1 {
-            let winner = remaining[0];
+        if remaining.len() == 1
+            && let Some(winner) = remaining.first()
+        {
             messages.push(ServerMessage::GameOver {
                 winner_id: winner.id,
                 winner_name: winner.name.clone(),
@@ -904,6 +913,7 @@ impl GameState {
     }
 
     /// Build a [`Board`] from the current community cards.
+    #[must_use]
     pub fn build_board(&self) -> Board {
         let flop = match self.community_cards.as_slice() {
             &[c1, c2, c3, ..] => Some((c1, c2, c3)),
@@ -919,6 +929,7 @@ impl GameState {
     /// The next blind level, computed with the same `increase_percent` and
     /// `div_ceil` rounding the [`Self::start_new_hand`] bump uses. Returns the
     /// current level unchanged when rising blinds aren't configured.
+    #[must_use]
     pub fn next_blinds(&self) -> (u32, u32) {
         let pct = self.blind_config.increase_percent;
         let next = |cur: u32| cur.saturating_add(cur.saturating_mul(pct).div_ceil(100));
@@ -930,6 +941,7 @@ impl GameState {
     /// the `start_new_hand` catch-up loop uses — so the countdown reaches 0 at
     /// exactly the moment the next hand will step the level. `None` when rising
     /// blinds aren't configured or the anchor hasn't been set yet (lobby).
+    #[must_use]
     pub fn seconds_to_next_blind(&self) -> Option<u64> {
         if !self.blind_config.is_enabled() {
             return None;
@@ -945,6 +957,7 @@ impl GameState {
     }
 
     /// Get valid actions for current player.
+    #[must_use]
     pub fn valid_actions(&self, player_id: u32) -> Vec<PlayerAction> {
         let mut actions = Vec::new();
 

@@ -26,20 +26,5 @@ wry = "0.56"
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
 
-[lints.clippy]
-pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-# DENY PANICS:
-unwrap_used = "deny"
-expect_used = "deny"
-indexing_slicing = "deny"
-arithmetic_side_effects = "deny"
-unreachable = "deny"
-unimplemented = "deny"
-unchecked_time_subtraction = "deny"
-todo = "deny"
-string_slice = "deny"
-panic_in_result_fn = "deny"
-panic = "deny"
-exit = "deny"
-as_conversions = "deny"
+[lints]
+workspace = true
