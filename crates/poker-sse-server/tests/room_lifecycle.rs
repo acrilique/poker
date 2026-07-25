@@ -611,7 +611,7 @@ async fn boundary_sweep_reclaims_leaver_even_when_result_is_pause() {
     {
         let mut room = room_arc.lock().await;
         assert!(
-            poker_sse_server::handlers::sweep_leavers(&mut room, "sweep1"),
+            poker_sse_server::flow::sweep_leavers(&mut room, "sweep1"),
             "the sweep should reclaim the flagged leaver"
         );
     }

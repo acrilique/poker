@@ -17,31 +17,32 @@
 
 //! HTTP handlers: the CQRS write side.
 //!
-//! Each action POST mutates the room's [`GameState`] under the room `Mutex`,
-//! then fans the resulting [`DatastarEvent`]s to the right players' SSE
-//! streams.
+//! Each action POST extracts signals, authorizes, then delegates the game
+//! mutation to [`crate::flow`] (which drives [`GameState::apply_action`] and
+//! the post-action loop) and the render/fanout glue below. The SSE read side
+//! lives in [`crate::sse`].
 
-use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::task::{Context, Poll};
 
 use askama::Template;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use futures_util::{Stream, StreamExt};
-use poker_core::poker::Hand;
-use poker_core::protocol::{BlindConfig, CardInfo, PlayerAction, card_to_info};
+use poker_core::protocol::{BlindConfig, PlayerAction};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
+use crate::flow;
 use crate::render::{self, Ctx};
-use crate::room::{CallerCtx, Fanout, Room, RoomManager, remove_player_now, resolve_caller};
-use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
+use crate::room::{CallerCtx, Fanout, Room, resolve_caller};
+use poker_core::game_logic::TURN_TIMEOUT_SECS;
 
 use crate::AppState;
+
+// ---------------------------------------------------------------------------
+// Signal coercion helpers
+// ---------------------------------------------------------------------------
 
 /// Clamp a finite, non-negative `f64` into a `u64` without silent `as`
 /// truncation/sign loss. NaN/negatives → 0, out-of-range → `u64::MAX`.
@@ -79,6 +80,24 @@ fn value_as_f64(v: &serde_json::Value) -> f64 {
         serde_json::Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
         _ => 0.0,
     }
+}
+
+/// Build a [`BlindConfig`] from the `blindmins` / `blindpct` signal values that
+/// the connect-screen and in-game settings panel both send. Shared by
+/// [`room_create`] and [`action_update_settings`].
+fn blind_config_from_signals(
+    blind_mins: &serde_json::Value,
+    blind_pct: &serde_json::Value,
+) -> BlindConfig {
+    BlindConfig {
+        interval_secs: f64_to_u64(value_as_f64(blind_mins)).saturating_mul(60),
+        increase_percent: f64_to_u32(value_as_f64(blind_pct)),
+    }
+}
+
+/// Parse the `stackbbs` signal into a starting-stack size, clamped to ≥ 1 BB.
+fn starting_bbs_from_signals(stack_bbs: &serde_json::Value) -> u32 {
+    f64_to_u32(value_as_f64(stack_bbs)).max(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +186,24 @@ pub struct SessionSignals {
     pub session_token: String,
 }
 
+/// A signal payload that carries a room id + session token. Implemented by the
+/// signal structs that share those fields ([`SessionSignals`] itself,
+/// [`RaiseSignals`], [`UpdateSettingsSignals`]) so handlers can authorize from
+/// any of them without rebuilding a `SessionSignals` by hand each time.
+pub trait HasSession {
+    /// Borrowed view of the room id / session token carried by this payload.
+    fn session(&self) -> SessionSignals;
+}
+
+impl HasSession for SessionSignals {
+    fn session(&self) -> Self {
+        Self {
+            room_id: self.room_id.clone(),
+            session_token: self.session_token.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 pub struct CreateSignals {
@@ -200,6 +237,15 @@ pub struct RaiseSignals {
     pub raise_amt: serde_json::Value,
 }
 
+impl HasSession for RaiseSignals {
+    fn session(&self) -> SessionSignals {
+        SessionSignals {
+            room_id: self.room_id.clone(),
+            session_token: self.session_token.clone(),
+        }
+    }
+}
+
 /// Host-only settings update (mirrors [`CreateSignals`], sent from the
 /// in-game controls panel). All fields are `serde_json::Value` because the
 /// connect-screen inputs bind to string-valued signals.
@@ -218,153 +264,25 @@ pub struct UpdateSettingsSignals {
     pub stack_bbs: serde_json::Value,
 }
 
-// ---------------------------------------------------------------------------
-// SSE stream (the read side)
-// ---------------------------------------------------------------------------
-
-/// Runs teardown on client disconnect. On reload/tab-close, hyper drops the
-/// response future, so the `stream::once` finalizer below never runs. Cleanup
-/// belongs in `Drop`, which spawns [`RoomManager::disconnect_player`]. That's
-/// idempotent (generation guard), so this drop path and the server-side path
-/// can both fire.
-struct DisconnectGuard {
-    inner: Option<Pin<Box<dyn Stream<Item = SseItem> + Send>>>,
-    /// `Some` until `Drop` takes it to spawn the teardown task.
-    teardown: Option<(
-        Arc<RoomManager>,
-        String, // room_id
-        u32,    // player_id
-        u64,    // connection generation
-    )>,
-}
-
-/// Item type of the `/poker/events` SSE stream: an axum `Event`, or an
-/// infallible error (the inner stream never errors).
-type SseItem = Result<axum::response::sse::Event, std::convert::Infallible>;
-
-impl Stream for DisconnectGuard {
-    type Item = SseItem;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        this.inner
-            .as_mut()
-            .map_or_else(|| Poll::Ready(None), |s| s.as_mut().poll_next(cx))
-    }
-}
-
-impl Drop for DisconnectGuard {
-    fn drop(&mut self) {
-        if let Some((manager, room_id, pid, generation)) = self.teardown.take() {
-            tracing::info!(
-                room = %room_id,
-                player = pid,
-                generation,
-                "SSE stream dropped — spawning disconnect teardown"
-            );
-            tokio::spawn(async move {
-                manager.disconnect_player(&room_id, pid, generation).await;
-            });
+impl HasSession for UpdateSettingsSignals {
+    fn session(&self) -> SessionSignals {
+        SessionSignals {
+            room_id: self.room_id.clone(),
+            session_token: self.session_token.clone(),
         }
     }
 }
 
-pub async fn events(
-    State(state): State<AppState>,
-    ReadSignals(signals): ReadSignals<SessionSignals>,
-) -> impl IntoResponse {
-    let manager = state.room_manager.clone();
-    let room_id = signals.room_id.clone();
-    let token = signals.session_token.clone();
-
-    // Resolve the session; on failure stream a single error event and end.
-    // The error becomes a browser alert (targets <body>, so it works before
-    // #game-root exists).
-    let caller = match resolve_caller(&manager, &room_id, &token).await {
-        Ok(c) => c,
-        Err(e) => {
-            let err = render::error_events_pub(&e);
-            let stream = futures_util::stream::iter(
-                err.into_iter()
-                    .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
-            );
-            return Sse::new(stream).into_response();
-        }
-    };
-
-    // If the room already finished (GameOver broadcast), tear it down and
-    // tell the client to reset.
-    let teardown = {
-        let room = caller.room_arc.lock().await;
-        room.game_over
-    };
-    if teardown {
-        manager.remove_room(&room_id).await;
-        // Notify via alert, then blank the session signals; pokerHandleFetch
-        // clears localStorage.
-        let mut evs = render::notice_events("This game has ended. Thanks for playing!");
-        evs.push(render::patch_signals(
-            &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
-        ));
-        let stream = futures_util::stream::iter(
-            evs.into_iter()
-                .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
-        );
-        return Sse::new(stream).into_response();
-    }
-
-    let (rx, initial, generation) =
-        RoomManager::attach_stream(&caller.room_arc, &room_id, caller.player_id, false).await;
-
-    let pid = caller.player_id;
-    let manager2 = manager.clone();
-    let rid = room_id.clone();
-
-    let stream = futures_util::stream::iter(
-        initial
-            .into_iter()
-            .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
-    )
-    .chain(
-        tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| Ok(ev.write_as_axum_sse_event())),
-    )
-    .chain(futures_util::stream::once(async move {
-        // Server-side close path: fires when the inner channel sender is
-        // dropped (e.g. the seat is reclaimed elsewhere). Doesn't fire on
-        // client disconnect — see [`DisconnectGuard`].
-        manager2.detach_stream(&rid, pid, generation).await;
-        tracing::info!(room = %rid, player = pid, generation, "SSE stream closed (server-side)");
-        // Yield nothing further; this once() exists only for the side effect.
-        Ok(datastar::prelude::PatchSignals::new("{}").write_as_axum_sse_event())
-    }));
-
-    let guarded = DisconnectGuard {
-        inner: Some(Box::pin(stream)),
-        teardown: Some((manager.clone(), room_id.clone(), pid, generation)),
-    };
-
-    Sse::new(guarded)
-        .keep_alive(
-            axum::response::sse::KeepAlive::new()
-                .interval(std::time::Duration::from_secs(15))
-                .text("ping"),
-        )
-        .into_response()
-}
-
 // ---------------------------------------------------------------------------
-// Room create / join
+// Room create / join / leave
 // ---------------------------------------------------------------------------
 
 pub async fn room_create(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<CreateSignals>,
 ) -> impl IntoResponse {
-    let blind_config = BlindConfig {
-        interval_secs: f64_to_u64(value_as_f64(&signals.blind_mins)).saturating_mul(60),
-        increase_percent: f64_to_u32(value_as_f64(&signals.blind_pct)),
-    };
-    let starting_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
+    let blind_config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
+    let starting_bbs = starting_bbs_from_signals(&signals.stack_bbs);
 
     match state
         .room_manager
@@ -408,7 +326,7 @@ pub async fn room_leave(
         room.game_state.game_started && room.game_state.current_player_id() == Some(ctx.player_id)
     };
     if is_their_turn {
-        process_action(
+        flow::process_action(
             ctx.player_id,
             PlayerAction::Fold,
             0,
@@ -493,82 +411,50 @@ pub async fn action_start(
     let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
-    start_game(ctx).await;
+    flow::start_game(ctx).await;
     no_content()
 }
 
 pub async fn action_fold(
-    State(state): State<AppState>,
-    ReadSignals(signals): ReadSignals<SessionSignals>,
+    state: State<AppState>,
+    signals: ReadSignals<SessionSignals>,
 ) -> impl IntoResponse {
-    let Some(ctx) = authorize(&state, &signals).await else {
-        return no_content();
-    };
-    process_action(
-        ctx.player_id,
-        PlayerAction::Fold,
-        0,
-        &ctx.room_arc,
-        &ctx.room_id,
-    )
-    .await;
-    maybe_cleanup_after_action(&state, &ctx).await;
-    no_content()
+    dispatch_simple_action(state, signals, PlayerAction::Fold).await
 }
 
 pub async fn action_check(
-    State(state): State<AppState>,
-    ReadSignals(signals): ReadSignals<SessionSignals>,
+    state: State<AppState>,
+    signals: ReadSignals<SessionSignals>,
 ) -> impl IntoResponse {
-    let Some(ctx) = authorize(&state, &signals).await else {
-        return no_content();
-    };
-    process_action(
-        ctx.player_id,
-        PlayerAction::Check,
-        0,
-        &ctx.room_arc,
-        &ctx.room_id,
-    )
-    .await;
-    maybe_cleanup_after_action(&state, &ctx).await;
-    no_content()
+    dispatch_simple_action(state, signals, PlayerAction::Check).await
 }
 
 pub async fn action_call(
-    State(state): State<AppState>,
-    ReadSignals(signals): ReadSignals<SessionSignals>,
+    state: State<AppState>,
+    signals: ReadSignals<SessionSignals>,
 ) -> impl IntoResponse {
-    let Some(ctx) = authorize(&state, &signals).await else {
-        return no_content();
-    };
-    process_action(
-        ctx.player_id,
-        PlayerAction::Call,
-        0,
-        &ctx.room_arc,
-        &ctx.room_id,
-    )
-    .await;
-    maybe_cleanup_after_action(&state, &ctx).await;
-    no_content()
+    dispatch_simple_action(state, signals, PlayerAction::Call).await
 }
 
 pub async fn action_allin(
+    state: State<AppState>,
+    signals: ReadSignals<SessionSignals>,
+) -> impl IntoResponse {
+    dispatch_simple_action(state, signals, PlayerAction::AllIn).await
+}
+
+/// Authorize, apply a no-amount action (`Fold` / `Check` / `Call` / `AllIn`),
+/// then run the post-action `GameOver` cleanup. Returns `204` either way: the
+/// action's effects land on the caller's SSE stream, not in this response.
+async fn dispatch_simple_action(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<SessionSignals>,
-) -> impl IntoResponse {
+    action: PlayerAction,
+) -> axum::response::Response {
     let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
-    process_action(
-        ctx.player_id,
-        PlayerAction::AllIn,
-        0,
-        &ctx.room_arc,
-        &ctx.room_id,
-    )
-    .await;
+    flow::process_action(ctx.player_id, action, 0, &ctx.room_arc, &ctx.room_id).await;
     maybe_cleanup_after_action(&state, &ctx).await;
     no_content()
 }
@@ -577,11 +463,7 @@ pub async fn action_raise(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<RaiseSignals>,
 ) -> impl IntoResponse {
-    let session = SessionSignals {
-        room_id: signals.room_id.clone(),
-        session_token: signals.session_token.clone(),
-    };
-    let Some(ctx) = authorize(&state, &session).await else {
+    let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
     let amount = match &signals.raise_amt {
@@ -589,7 +471,7 @@ pub async fn action_raise(
         serde_json::Value::String(s) => f64_to_u32(s.trim().parse::<f64>().unwrap_or(0.0)),
         _ => 0,
     };
-    process_action(
+    flow::process_action(
         ctx.player_id,
         PlayerAction::Raise,
         amount,
@@ -652,10 +534,7 @@ pub async fn action_sitin(
     };
 
     if start_new_hand {
-        let sitting_out = maybe_start_new_hand(&room_arc, &ctx.room_id).await;
-        if let Some((pid2, act)) = sitting_out {
-            process_action(pid2, act, 0, &room_arc, &ctx.room_id).await;
-        }
+        flow::resume_after_sit_in(&room_arc, &ctx.room_id).await;
     }
     no_content()
 }
@@ -688,11 +567,7 @@ pub async fn action_update_settings(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<UpdateSettingsSignals>,
 ) -> impl IntoResponse {
-    let session = SessionSignals {
-        room_id: signals.room_id.clone(),
-        session_token: signals.session_token.clone(),
-    };
-    let Some(ctx) = authorize(&state, &session).await else {
+    let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
     let mut room = ctx.room_arc.lock().await;
@@ -706,10 +581,7 @@ pub async fn action_update_settings(
         return no_content();
     }
 
-    let new_config = BlindConfig {
-        interval_secs: f64_to_u64(value_as_f64(&signals.blind_mins)).saturating_mul(60),
-        increase_percent: f64_to_u32(value_as_f64(&signals.blind_pct)),
-    };
+    let new_config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
     room.game_state.blind_config = new_config;
     // Room.blind_config mirrors game_state's.
     room.blind_config = new_config;
@@ -717,7 +589,7 @@ pub async fn action_update_settings(
     // `starting_bbs` is frozen into `starting_chips` at game start, so only
     // apply it pre-game.
     if !room.game_state.game_started {
-        let new_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
+        let new_bbs = starting_bbs_from_signals(&signals.stack_bbs);
         room.game_state.starting_bbs = new_bbs;
         // Chips are frozen into each player at join time
         // (`add_player_with_chips`), so `starting_bbs` alone doesn't reach
@@ -748,11 +620,12 @@ pub async fn action_update_settings(
 // Authorization helper
 // ---------------------------------------------------------------------------
 
-async fn authorize(state: &AppState, signals: &SessionSignals) -> Option<CallerCtx> {
+async fn authorize(state: &AppState, signals: &(impl HasSession + Sync)) -> Option<CallerCtx> {
+    let session = signals.session();
     match resolve_caller(
         &state.room_manager,
-        &signals.room_id,
-        &signals.session_token,
+        &session.room_id,
+        &session.session_token,
     )
     .await
     {
@@ -767,7 +640,7 @@ async fn authorize(state: &AppState, signals: &SessionSignals) -> Option<CallerC
 }
 
 // ---------------------------------------------------------------------------
-// Message fanout helpers (all under the room lock)
+// Render / fanout glue (shared with [`crate::flow`])
 // ---------------------------------------------------------------------------
 
 /// Render the full state snapshot for `pid` under the room lock. `ctx` borrows
@@ -783,7 +656,7 @@ async fn render_full_snapshot(
     render::full_snapshot(&ctx, pid)
 }
 
-pub fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
+pub(crate) fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
     // Absolute epoch-ms deadline for the current turn. Unlike a remaining-seconds
     // value, a deadline is stable across renders: a reconnect at T=10 of a 30s
     // turn gets the same deadline as the original render at T=0, so the
@@ -795,11 +668,7 @@ pub fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
         let remaining_ms = u128::from(TURN_TIMEOUT_SECS)
             .saturating_mul(1000)
             .saturating_sub(elapsed_ms);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        now.saturating_add(remaining_ms).to_string()
+        render::epoch_ms_deadline(remaining_ms)
     });
     Ctx::new(&room.game_state, room_id, turn_deadline_ms)
 }
@@ -807,7 +676,7 @@ pub fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
 /// Render the full settled state for every connected player (a fat-morph of
 /// `#game-root`) and fan out. Each viewer's state regions are recomputed from
 /// the final `GameState` at a point where the game is about to wait.
-pub fn broadcast_state(room: &mut Room, room_id: &str) {
+pub(crate) fn broadcast_state(room: &mut Room, room_id: &str) {
     let per_viewer: Vec<(u32, Vec<datastar::DatastarEvent>)> = {
         let ctx = ctx_of(room, room_id);
         room.players
@@ -824,7 +693,7 @@ pub fn broadcast_state(room: &mut Room, room_id: &str) {
 /// Surface a transient error to one player via the in-table `#toast` region
 /// (see [`render::toast_events`]). For pre-action rejections like "Not your
 /// turn"; only fires after the player is connected, so the region is mounted.
-fn send_error(room: &mut Room, _room_id: &str, viewer: u32, detail: &str) {
+pub(crate) fn send_error(room: &mut Room, _room_id: &str, viewer: u32, detail: &str) {
     let evs = render::toast_events(detail);
     let mut fan = Fanout::new(room);
     fan.send_to(viewer, &evs);
@@ -851,700 +720,4 @@ async fn maybe_cleanup_after_action(state: &AppState, ctx: &CallerCtx) {
         }
     }
     drop(room);
-}
-
-// ---------------------------------------------------------------------------
-// Game flow (ported from ws_handler.rs)
-// ---------------------------------------------------------------------------
-
-async fn start_game(ctx: CallerCtx) {
-    let room_arc = ctx.room_arc.clone();
-    let mut room = room_arc.lock().await;
-    let pid = ctx.player_id;
-
-    if room.game_state.game_started {
-        send_error(&mut room, &ctx.room_id, pid, "Game already started");
-        return;
-    }
-    if room.game_state.player_count() < 2 {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            pid,
-            "Need at least 2 players to start",
-        );
-        return;
-    }
-    if room.game_state.host_id != pid {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            pid,
-            "Only the host can perform this action",
-        );
-        return;
-    }
-
-    room.game_state.game_started = true;
-
-    // Freeze the starting chip amount and big blind for late entries.
-    room.game_state.starting_big_blind = room.game_state.big_blind;
-    room.game_state.starting_chips = room
-        .game_state
-        .starting_bbs
-        .saturating_mul(room.game_state.big_blind);
-
-    // Initialise the blind increase timer if configured.
-    if room.game_state.blind_config.is_enabled() {
-        room.game_state.last_blind_increase = Some(std::time::Instant::now());
-    }
-
-    // Start the first hand. State regions are rendered once below by
-    // notify_turn_and_start_timer from this settled state.
-    let _hand_msgs = room.game_state.start_new_hand();
-
-    // Notify the current player it's their turn, render state, and start the
-    // timer.
-    let sitting_out = notify_turn_and_start_timer(&mut room, &room_arc, &ctx.room_id);
-    drop(room);
-    if let Some((spid, act)) = sitting_out {
-        process_action(spid, act, 0, &room_arc, &ctx.room_id).await;
-    }
-}
-
-/// Apply a betting action: validate it, mutate chips/bets, then drive the
-/// post-action loop (advance phase, resolve hand, start next hand) until the
-/// game reaches a stable wait point. `room_id` is passed explicitly because
-/// every call site already has it.
-pub async fn process_action(
-    player_id: u32,
-    action: PlayerAction,
-    amount: u32,
-    room_arc: &Arc<Mutex<Room>>,
-    room_id: &str,
-) {
-    process_action_with_room(room_arc, player_id, action, amount, room_id).await;
-}
-
-/// See [`process_action`]. The match arms mutate shared `room`/`player` state
-/// with early `return`s, so they don't decompose into helpers without
-/// duplicating the pre-checks — hence the length.
-#[allow(clippy::too_many_lines)]
-async fn process_action_with_room(
-    room_arc: &Arc<Mutex<Room>>,
-    player_id: u32,
-    action: PlayerAction,
-    amount: u32,
-    room_id: &str,
-) {
-    let mut room = room_arc.lock().await;
-
-    // ── Pre-checks ───────────────────────────────────────────────────
-    if !room.game_state.game_started {
-        send_error(&mut room, room_id, player_id, "Game not started");
-        return;
-    }
-
-    if room.game_state.current_player_id() != Some(player_id) {
-        send_error(&mut room, room_id, player_id, "Not your turn");
-        return;
-    }
-
-    let valid = room.game_state.valid_actions(player_id);
-    if !valid.contains(&action) {
-        send_error(&mut room, room_id, player_id, "Invalid action");
-        return;
-    }
-
-    let Some(player) = room.game_state.players.get(&player_id).cloned() else {
-        send_error(&mut room, room_id, player_id, "Player not found");
-        return;
-    };
-
-    let to_call = room
-        .game_state
-        .current_bet
-        .saturating_sub(player.current_bet);
-
-    // ── Apply the action ─────────────────────────────────────────────
-    match action {
-        PlayerAction::Fold => {
-            if let Some(p) = room.game_state.players.get_mut(&player_id) {
-                p.status = PlayerStatus::Folded;
-            }
-        }
-        PlayerAction::Check => {
-            if to_call != 0 {
-                send_error(
-                    &mut room,
-                    room_id,
-                    player_id,
-                    "Cannot check, must call or raise",
-                );
-                return;
-            }
-            if room.game_state.phase == GamePhase::PreFlop && room.game_state.big_blind_option {
-                room.game_state.big_blind_option = false;
-                room.game_state.last_raiser_index = None;
-            }
-        }
-        PlayerAction::Call => {
-            let call_amount = to_call.min(player.chips);
-            if let Some(p) = room.game_state.players.get_mut(&player_id) {
-                p.chips = p.chips.saturating_sub(call_amount);
-                p.current_bet = p.current_bet.saturating_add(call_amount);
-                if p.chips == 0 {
-                    p.status = PlayerStatus::AllIn;
-                }
-            }
-            room.game_state.pot = room.game_state.pot.saturating_add(call_amount);
-            let entry = room
-                .game_state
-                .pot_contributions
-                .entry(player_id)
-                .or_insert(0);
-            *entry = entry.saturating_add(call_amount);
-        }
-        PlayerAction::Raise => {
-            let raise_total = to_call.saturating_add(amount);
-            if raise_total > player.chips {
-                send_error(
-                    &mut room,
-                    room_id,
-                    player_id,
-                    &format!(
-                        "Not enough chips. Have {}, need {raise_total}",
-                        player.chips
-                    ),
-                );
-                return;
-            }
-            let min_raise = room.game_state.min_raise;
-            if amount < min_raise && raise_total < player.chips {
-                send_error(
-                    &mut room,
-                    room_id,
-                    player_id,
-                    &format!("Minimum raise is {min_raise}"),
-                );
-                return;
-            }
-
-            let new_bet;
-            if let Some(p) = room.game_state.players.get_mut(&player_id) {
-                p.chips = p.chips.saturating_sub(raise_total);
-                p.current_bet = p.current_bet.saturating_add(raise_total);
-                new_bet = p.current_bet;
-                if p.chips == 0 {
-                    p.status = PlayerStatus::AllIn;
-                }
-            } else {
-                new_bet = player.current_bet.saturating_add(raise_total);
-            }
-            room.game_state.pot = room.game_state.pot.saturating_add(raise_total);
-            let entry = room
-                .game_state
-                .pot_contributions
-                .entry(player_id)
-                .or_insert(0);
-            *entry = entry.saturating_add(raise_total);
-            let previous_current_bet = room.game_state.current_bet;
-            room.game_state.current_bet = new_bet;
-            // Only reopen betting if the raise constitutes a full legal raise.
-            // A sub-minimum all-in raise (via Raise when raise_total == chips)
-            // should NOT set last_raiser_index, matching the AllIn handler's logic.
-            let raise_increment = new_bet.saturating_sub(previous_current_bet);
-            if raise_increment >= room.game_state.min_raise {
-                room.game_state.min_raise = raise_increment.max(room.game_state.big_blind);
-                room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
-            }
-            room.game_state.big_blind_option = false;
-        }
-        PlayerAction::AllIn => {
-            let all_in = player.chips;
-            let new_bet;
-            if let Some(p) = room.game_state.players.get_mut(&player_id) {
-                p.chips = 0;
-                p.current_bet = p.current_bet.saturating_add(all_in);
-                new_bet = p.current_bet;
-                p.status = PlayerStatus::AllIn;
-            } else {
-                new_bet = player.current_bet.saturating_add(all_in);
-            }
-            room.game_state.pot = room.game_state.pot.saturating_add(all_in);
-            let entry = room
-                .game_state
-                .pot_contributions
-                .entry(player_id)
-                .or_insert(0);
-            *entry = entry.saturating_add(all_in);
-            if new_bet > room.game_state.current_bet {
-                // Only reopen betting (set last_raiser_index) if the all-in
-                // constitutes a full legal raise.
-                let raise_increment = new_bet.saturating_sub(room.game_state.current_bet);
-                if raise_increment >= room.game_state.min_raise {
-                    room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
-                }
-                room.game_state.current_bet = new_bet;
-            }
-        }
-    }
-
-    room.game_state.has_acted_this_round = true;
-    room.game_state.next_player();
-
-    // ── Post-action: check hand / betting status ─────────────────────
-    //
-    // The action bar, player list, and pot are only rendered at the terminal
-    // points below (notify_turn_and_start_timer / resolve_hand /
-    // advance_phase) — never mid-transition.
-    loop {
-        if room.game_state.active_player_count() == 1 {
-            let _msgs = room.game_state.resolve_hand();
-            broadcast_state(&mut room, room_id);
-            drop(room);
-            if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
-                room = room_arc.lock().await;
-                apply_sitting_out_action(&mut room, pid, act);
-                continue;
-            }
-            return;
-        }
-
-        if room.game_state.is_betting_complete() {
-            if room.game_state.phase == GamePhase::River {
-                let _msgs = room.game_state.resolve_hand();
-                broadcast_state(&mut room, room_id);
-                drop(room);
-                if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
-                    room = room_arc.lock().await;
-                    apply_sitting_out_action(&mut room, pid, act);
-                    continue;
-                }
-                return;
-            }
-            // Advance to next phase and render the new community cards.
-            let _phase_msgs = room.game_state.advance_phase();
-            broadcast_state(&mut room, room_id);
-
-            // If only all-in players remain, run it out.
-            if room.game_state.actionable_players().is_empty() {
-                drop(room);
-                broadcast_allin_showdown(room_arc, room_id).await;
-                run_out_board(room_arc, room_id).await;
-                return;
-            }
-
-            if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc, room_id) {
-                apply_sitting_out_action(&mut room, pid, act);
-                continue;
-            }
-            return;
-        }
-
-        if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc, room_id) {
-            apply_sitting_out_action(&mut room, pid, act);
-            continue;
-        }
-        return;
-    }
-}
-
-/// Hand-boundary sweep: hard-remove every player flagged `wants_leave` from an
-/// explicit mid-hand "Exit Game" ([`RoomManager::leave_room`]). This is the
-/// only index-safe removal point — callers invoke it between hands, where the
-/// next `start_new_hand` recomputes every positional index (dealer / blinds /
-/// current actor) from the surviving `player_order`, so removing entries here
-/// can't desync the betting loop the way a mid-hand `remove_player` would.
-/// Broadcasts once after the whole batch. Returns whether any player was
-/// removed, so the caller can re-check the active count / tear the room down.
-pub fn sweep_leavers(room: &mut Room, room_id: &str) -> bool {
-    let leavers: Vec<u32> = room
-        .players
-        .iter()
-        .filter(|(_, c)| c.wants_leave)
-        .map(|(id, _)| *id)
-        .collect();
-    if leavers.is_empty() {
-        return false;
-    }
-    for pid in &leavers {
-        remove_player_now(room, room_id, *pid);
-    }
-    broadcast_state(room, room_id);
-    true
-}
-
-/// If ≥ 2 active players remain, start the next hand after a short delay.
-/// Otherwise pause and wait for players to sit back in.
-///
-/// Locks are already scoped as tightly as the borrow checker allows; the
-/// remaining flagged gap is the value flowing straight into the return.
-#[allow(clippy::significant_drop_tightening)]
-async fn maybe_start_new_hand(
-    room_arc: &Arc<Mutex<Room>>,
-    room_id: &str,
-) -> Option<(u32, PlayerAction)> {
-    let should_start = {
-        let mut room = room_arc.lock().await;
-        if !room.game_state.game_started {
-            return None;
-        }
-
-        // Sweep first — before the active-count / pause decision — so a leave
-        // that drops the room below 2 active (→ pause) is still cleaned up. If
-        // the sweep emptied the room, let the last stream's Drop tear it down.
-        if sweep_leavers(&mut room, room_id) && !room.players.values().any(|c| c.tx.is_some()) {
-            return None;
-        }
-
-        let active_count = room
-            .game_state
-            .player_order
-            .iter()
-            .filter(|id| {
-                room.game_state
-                    .players
-                    .get(id)
-                    .is_some_and(|p| !p.sitting_out && p.chips > 0)
-            })
-            .count();
-
-        if active_count >= 2 {
-            room.game_state.waiting_for_players = false;
-            true
-        } else {
-            room.game_state.waiting_for_players = true;
-            // Paused: render state (no turn pending).
-            broadcast_state(&mut room, room_id);
-            false
-        }
-    }; // lock released
-
-    if !should_start {
-        return None;
-    }
-
-    // Delay without holding the room lock so other actions can still process.
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
-    // Re-acquire the lock and re-check conditions.
-    let mut room = room_arc.lock().await;
-
-    if !room.game_state.game_started {
-        return None;
-    }
-
-    let active_count = room
-        .game_state
-        .player_order
-        .iter()
-        .filter(|id| {
-            room.game_state
-                .players
-                .get(id)
-                .is_some_and(|p| !p.sitting_out && p.chips > 0)
-        })
-        .count();
-
-    if active_count < 2 {
-        room.game_state.waiting_for_players = true;
-        broadcast_state(&mut room, room_id);
-        return None;
-    }
-
-    let _hand_msgs = room.game_state.start_new_hand();
-    notify_turn_and_start_timer(&mut room, room_arc, room_id)
-}
-
-/// Run out the remaining community cards when all players are all-in.
-async fn run_out_board(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
-    'run_out: loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-
-        let mut room = room_arc.lock().await;
-
-        let _phase_msgs = room.game_state.advance_phase();
-        broadcast_state(&mut room, room_id);
-
-        if room.game_state.phase == GamePhase::Showdown {
-            let _msgs = room.game_state.resolve_hand();
-            broadcast_state(&mut room, room_id);
-            drop(room);
-            if let Some((mut pid, mut act)) = maybe_start_new_hand(room_arc, room_id).await {
-                let mut room = room_arc.lock().await;
-                loop {
-                    apply_sitting_out_action(&mut room, pid, act);
-
-                    if room.game_state.active_player_count() == 1 {
-                        let _hand_msgs = room.game_state.resolve_hand();
-                        broadcast_state(&mut room, room_id);
-                        drop(room);
-                        if let Some((np, na)) = maybe_start_new_hand(room_arc, room_id).await {
-                            room = room_arc.lock().await;
-                            pid = np;
-                            act = na;
-                            continue;
-                        }
-                        break;
-                    }
-
-                    if room.game_state.is_betting_complete() {
-                        if room.game_state.phase == GamePhase::River {
-                            let _hand_msgs = room.game_state.resolve_hand();
-                            broadcast_state(&mut room, room_id);
-                            drop(room);
-                            if let Some((np, na)) = maybe_start_new_hand(room_arc, room_id).await {
-                                room = room_arc.lock().await;
-                                pid = np;
-                                act = na;
-                                continue;
-                            }
-                            break;
-                        }
-                        let _phase_msgs = room.game_state.advance_phase();
-                        broadcast_state(&mut room, room_id);
-                        if room.game_state.actionable_players().is_empty() {
-                            drop(room);
-                            broadcast_allin_showdown(room_arc, room_id).await;
-                            continue 'run_out;
-                        }
-                        if let Some((np, na)) =
-                            notify_turn_and_start_timer(&mut room, room_arc, room_id)
-                        {
-                            pid = np;
-                            act = na;
-                            continue;
-                        }
-                        break;
-                    }
-
-                    if let Some((np, na)) =
-                        notify_turn_and_start_timer(&mut room, room_arc, room_id)
-                    {
-                        pid = np;
-                        act = na;
-                        continue;
-                    }
-                    break;
-                }
-            }
-            return;
-        }
-    }
-}
-
-/// Notify the player whose turn it is **and** start the turn timer.
-///
-/// Returns `Some((player_id, action))` when the current player is sitting
-/// out so the caller can process their auto-action synchronously.
-fn notify_turn_and_start_timer(
-    room: &mut Room,
-    room_arc: &Arc<Mutex<Room>>,
-    room_id: &str,
-) -> Option<(u32, PlayerAction)> {
-    let current_id = room.game_state.current_player_id()?;
-
-    // Bump the turn counter (invalidates stale timer tasks) and stamp when
-    // this turn began (for mid-turn reconnects), before rendering.
-    let turn = room
-        .turn_counter
-        .fetch_add(1, Ordering::SeqCst)
-        .saturating_add(1);
-    room.turn_started_at = Some(std::time::Instant::now());
-
-    if room.game_state.is_current_player_sitting_out() {
-        let valid = room.game_state.valid_actions(current_id);
-        let action = if valid.contains(&PlayerAction::Check) {
-            PlayerAction::Check
-        } else {
-            PlayerAction::Fold
-        };
-        tracing::info!(
-            player = current_id,
-            ?action,
-            "Sitting-out player, auto-acting"
-        );
-        // Do NOT render state here: the caller will loop and process this
-        // auto-action, landing on a real terminal (another turn / resolve /
-        // new hand) that renders state once.
-        return Some((current_id, action));
-    }
-
-    // Terminal point for a real turn: the active action bar (per-viewer) and
-    // the countdown ring (data-turn-deadline on the active player's row, ticked
-    // client-side by pokerTurnTick) are both produced by state_events here.
-    broadcast_state(room, room_id);
-
-    // Spawn a task to force an action after the timeout.
-    let counter = Arc::clone(&room.turn_counter);
-    let room_arc_clone = Arc::clone(room_arc);
-    let rid = room_id.to_string();
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(TURN_TIMEOUT_SECS.into())).await;
-        if counter.load(Ordering::SeqCst) == turn {
-            force_timeout_action(room_arc_clone, turn, current_id, &rid).await;
-        }
-    });
-
-    None
-}
-
-/// Apply a sitting-out player's auto-action (Check or Fold) inline.
-fn apply_sitting_out_action(room: &mut Room, player_id: u32, action: PlayerAction) {
-    match action {
-        PlayerAction::Fold => {
-            if let Some(p) = room.game_state.players.get_mut(&player_id) {
-                p.status = PlayerStatus::Folded;
-            }
-        }
-        PlayerAction::Check => {
-            if room.game_state.phase == GamePhase::PreFlop && room.game_state.big_blind_option {
-                room.game_state.big_blind_option = false;
-                room.game_state.last_raiser_index = None;
-            }
-        }
-        _ => {
-            tracing::error!(?action, "Unexpected sitting-out auto-action");
-            return;
-        }
-    }
-
-    // The caller's post-action loop will land on a real terminal (turn /
-    // resolve / new hand) that renders state.
-    room.game_state.has_acted_this_round = true;
-    room.game_state.next_player();
-}
-
-/// Force a check-or-fold for a player whose turn timer has expired. The guard
-/// is released before `process_action_with_room` re-locks; the lint flags the
-/// trivial gap to the block end, which holds no contention.
-#[allow(clippy::significant_drop_tightening)]
-async fn force_timeout_action(
-    room_arc: Arc<Mutex<Room>>,
-    expected_turn: u64,
-    player_id: u32,
-    room_id: &str,
-) {
-    let action = {
-        let mut room = room_arc.lock().await;
-
-        if room.turn_counter.load(Ordering::SeqCst) != expected_turn {
-            return;
-        }
-        if !room.game_state.game_started {
-            return;
-        }
-        if room.game_state.current_player_id() != Some(player_id) {
-            return;
-        }
-
-        let valid = room.game_state.valid_actions(player_id);
-        let act = if valid.contains(&PlayerAction::Check) {
-            PlayerAction::Check
-        } else {
-            PlayerAction::Fold
-        };
-
-        // If forced to fold, sit the player out. The away state is rendered by
-        // the process_action_with_room call below at its terminal point.
-        if act == PlayerAction::Fold
-            && matches!(
-                room.game_state.players.get(&player_id),
-                Some(p) if !p.sitting_out
-            )
-        {
-            room.game_state.set_sitting_out(player_id);
-            tracing::info!(player = player_id, "Auto sitting out after timeout fold");
-        }
-
-        act
-    }; // lock released
-
-    tracing::info!(
-        player = player_id,
-        ?action,
-        "Turn timer expired, forcing action"
-    );
-
-    process_action_with_room(&room_arc, player_id, action, 0, room_id).await;
-}
-
-/// Broadcast an all-in showdown with equity percentages. Locks are scoped to
-/// the data-extraction / fanout phases and released before any await; the
-/// remaining flagged gap is the borrow feeding `ctx` into the per-viewer render.
-#[allow(clippy::significant_drop_tightening)]
-async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
-    // --- 1. Extract data while holding the lock (cheap) ----------------
-    let (player_hands, hands_for_calc, board) = {
-        let room = room_arc.lock().await;
-        let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
-
-        for &id in &room.game_state.player_order {
-            if let Some(player) = room.game_state.players.get(&id)
-                && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
-                && let Some((c1, c2)) = player.hole_cards
-            {
-                let cards = [card_to_info(&c1), card_to_info(&c2)];
-                player_hands.push((id, cards, Hand(c1, c2)));
-            }
-        }
-
-        if player_hands.len() < 2 {
-            return;
-        }
-
-        let board = room.game_state.build_board();
-        let hands_for_calc: Vec<Hand> = player_hands
-            .iter()
-            .map(|(_, _, h)| Hand(h.0, h.1))
-            .collect();
-
-        (player_hands, hands_for_calc, board)
-    }; // lock released
-
-    // --- 2. Run the CPU-heavy equity simulation off the async runtime --
-    // If the task panics (e.g. a bug in calculate_equity_multi), log and fall
-    // back to no equity overlay rather than tearing down this all-in run-out.
-    let equities = match tokio::task::spawn_blocking(move || {
-        poker_core::poker::calculate_equity_multi(&hands_for_calc, &board, 1000)
-    })
-    .await
-    {
-        Ok(v) => v,
-        Err(join_err) => {
-            tracing::error!(error = %join_err, "equity calculation task panicked");
-            return;
-        }
-    };
-
-    // --- 3. Re-acquire the lock and broadcast the result ---------------
-    let hands_with_equity: Vec<(u32, [CardInfo; 2], f64)> = player_hands
-        .iter()
-        .enumerate()
-        .map(|(i, (id, cards, _))| (*id, *cards, equities.get(i).copied().unwrap_or(0.0)))
-        .collect();
-
-    let mut room = room_arc.lock().await;
-
-    // Equity isn't in GameState, so render the all-in reveal table per-viewer
-    // (is_us is viewer-relative). The only UI not derivable from the snapshot.
-    let per_viewer: Vec<(u32, Vec<datastar::DatastarEvent>)> = {
-        let ctx = ctx_of(&room, room_id);
-        room.players
-            .keys()
-            .map(|&viewer| {
-                let events = vec![render::equity_table_events(
-                    &ctx,
-                    viewer,
-                    &hands_with_equity,
-                )];
-                (viewer, events)
-            })
-            .collect()
-    };
-    let mut fan = Fanout::new(&mut room);
-    for (viewer, events) in per_viewer {
-        fan.send_to(viewer, &events);
-    }
 }

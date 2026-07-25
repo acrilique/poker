@@ -34,6 +34,10 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use crate::render;
 use poker_core::game_logic::GameState;
 
+/// The active-rooms map. Each room is individually `Mutex`-protected so
+/// independent rooms never contend; the outer `RwLock` gates create / remove.
+type Rooms = RwLock<HashMap<String, Arc<Mutex<Room>>>>;
+
 /// How long a disconnected player's seat is held before permanent removal,
 /// while other connected players keep the game going.
 pub const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
@@ -282,7 +286,7 @@ fn clone_event(ev: &DatastarEvent) -> DatastarEvent {
 /// writes (create / remove) take exclusive access; each room is individually
 /// `Mutex`-protected, so independent rooms never contend.
 pub struct RoomManager {
-    rooms: Arc<RwLock<HashMap<String, Arc<Mutex<Room>>>>>,
+    rooms: Arc<Rooms>,
 }
 
 impl Default for RoomManager {
@@ -663,7 +667,7 @@ impl RoomManager {
                     let any_connected = room.players.values().any(|c| c.tx.is_some());
                     if !any_connected {
                         drop(room);
-                        remove_room_if_empty_owned(rooms_ref, &rid).await;
+                        remove_room_if_empty(&rooms_ref, &rid).await;
                     }
                 }
             });
@@ -679,7 +683,9 @@ impl RoomManager {
 
 /// Re-check (under the room lock) that a room is still empty, then drop it.
 /// Guards against a reconnect landing between the outer check and the removal.
-async fn remove_room_if_empty(rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>, room_id: &str) {
+/// Takes the rooms map by shared reference so the same implementation serves
+/// both `&self` call sites and detached tasks that cloned the `Arc`.
+async fn remove_room_if_empty(rooms: &Arc<Rooms>, room_id: &str) {
     let mut rooms = rooms.write().await;
     if let Some(room_arc) = rooms.get(room_id) {
         let room = room_arc.lock().await;
@@ -688,7 +694,7 @@ async fn remove_room_if_empty(rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>,
             drop(room);
             rooms.remove(room_id);
             drop(rooms);
-            tracing::info!(room_id, "Removed empty room");
+            tracing::info!(room = room_id, "Removed empty room");
         }
     }
 }
@@ -724,25 +730,6 @@ fn promote_host_if_needed(room: &mut Room, room_id: &str, removed_id: u32) {
     }
 }
 
-/// Owned-`Arc` variant of [`remove_room_if_empty`] for use from detached
-/// tasks that can't borrow the `RoomManager`.
-async fn remove_room_if_empty_owned(
-    rooms: Arc<RwLock<HashMap<String, Arc<Mutex<Room>>>>>,
-    room_id: &str,
-) {
-    let mut rooms = rooms.write().await;
-    if let Some(room_arc) = rooms.get(room_id) {
-        let r = room_arc.lock().await;
-        let still_empty = !r.players.values().any(|c| c.tx.is_some());
-        if still_empty {
-            drop(r);
-            rooms.remove(room_id);
-            drop(rooms);
-            tracing::info!(room = %room_id, "Removed empty room after grace period");
-        }
-    }
-}
-
 /// Generate a random session token (32-char hex string).
 fn generate_session_token() -> String {
     use rand::RngExt;
@@ -759,10 +746,7 @@ fn generate_session_token() -> String {
 }
 
 /// Helper: get an `Arc<Mutex<Room>>` reference from `rooms` `RwLock`.
-async fn self_ref(
-    room_id: &str,
-    rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>,
-) -> Option<Arc<Mutex<Room>>> {
+async fn self_ref(room_id: &str, rooms: &Rooms) -> Option<Arc<Mutex<Room>>> {
     let rooms = rooms.read().await;
     rooms.get(room_id).cloned()
 }

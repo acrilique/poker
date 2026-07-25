@@ -999,7 +999,205 @@ impl GameState {
 
         actions
     }
+
+    /// The auto-action a sitting-out player (or one whose turn timer expired)
+    /// takes: `Check` when legal, otherwise `Fold`. `None` if the player has no
+    /// valid action (not seated / not active). Unifies the check-or-fold logic
+    /// that previously lived inline in the transport layer's turn-timer and
+    /// disconnect paths.
+    #[must_use]
+    pub fn auto_action(&self, player_id: u32) -> Option<PlayerAction> {
+        let valid = self.valid_actions(player_id);
+        if valid.contains(&PlayerAction::Check) {
+            Some(PlayerAction::Check)
+        } else if valid.contains(&PlayerAction::Fold) {
+            Some(PlayerAction::Fold)
+        } else {
+            None
+        }
+    }
+
+    /// Apply one betting action: validate it, mutate chips / bets / pot / raise
+    /// state, then advance the turn. Does **not** drive the post-action state
+    /// machine (phase advance, hand resolution, next hand) — that's the caller's
+    /// job, since it needs transport-side fanout and timers between steps.
+    ///
+    /// This centralises the betting rules that the SSE server previously held
+    /// inline (and that the WS server duplicated), so both transports now share
+    /// one source of truth for chip/bet/pot mutation.
+    ///
+    /// # Errors
+    /// Returns [`ActionError`] when the action is illegal right now (game not
+    /// started, not the player's turn, invalid action, insufficient chips, …).
+    /// The transport layer surfaces the message to the player.
+    pub fn apply_action(
+        &mut self,
+        player_id: u32,
+        action: PlayerAction,
+        amount: u32,
+    ) -> Result<(), ActionError> {
+        if !self.game_started {
+            return Err(ActionError::GameNotStarted);
+        }
+        if self.current_player_id() != Some(player_id) {
+            return Err(ActionError::NotYourTurn);
+        }
+        if !self.valid_actions(player_id).contains(&action) {
+            return Err(ActionError::InvalidAction);
+        }
+
+        // Read the player's immutable state as Copy scalars up front, so the
+        // betting arms below can mutate `self` (players / pot / raise flags)
+        // without holding a shared borrow.
+        let player = self
+            .players
+            .get(&player_id)
+            .ok_or(ActionError::PlayerNotFound)?;
+        let to_call = self.current_bet.saturating_sub(player.current_bet);
+        let chips = player.chips;
+        let prev_current_bet = player.current_bet;
+
+        match action {
+            PlayerAction::Fold => {
+                if let Some(p) = self.players.get_mut(&player_id) {
+                    p.status = PlayerStatus::Folded;
+                }
+            }
+            PlayerAction::Check => {
+                if to_call != 0 {
+                    return Err(ActionError::CannotCheckMustCallOrRaise);
+                }
+                if self.phase == GamePhase::PreFlop && self.big_blind_option {
+                    self.big_blind_option = false;
+                    self.last_raiser_index = None;
+                }
+            }
+            PlayerAction::Call => {
+                let call_amount = to_call.min(chips);
+                if let Some(p) = self.players.get_mut(&player_id) {
+                    p.chips = p.chips.saturating_sub(call_amount);
+                    p.current_bet = p.current_bet.saturating_add(call_amount);
+                    if p.chips == 0 {
+                        p.status = PlayerStatus::AllIn;
+                    }
+                }
+                self.add_to_pot(player_id, call_amount);
+            }
+            PlayerAction::Raise => {
+                let raise_total = to_call.saturating_add(amount);
+                if raise_total > chips {
+                    return Err(ActionError::NotEnoughChips {
+                        have: chips,
+                        need: raise_total,
+                    });
+                }
+                // A sub-minimum raise is only legal as an all-in
+                // (raise_total == chips); otherwise enforce the floor.
+                if amount < self.min_raise && raise_total < chips {
+                    return Err(ActionError::RaiseBelowMinimum {
+                        min: self.min_raise,
+                    });
+                }
+
+                let new_bet;
+                if let Some(p) = self.players.get_mut(&player_id) {
+                    p.chips = p.chips.saturating_sub(raise_total);
+                    p.current_bet = p.current_bet.saturating_add(raise_total);
+                    new_bet = p.current_bet;
+                    if p.chips == 0 {
+                        p.status = PlayerStatus::AllIn;
+                    }
+                } else {
+                    new_bet = prev_current_bet.saturating_add(raise_total);
+                }
+                self.add_to_pot(player_id, raise_total);
+                let previous_current_bet = self.current_bet;
+                self.current_bet = new_bet;
+                // Only reopen betting (set last_raiser / bump min_raise) if this
+                // raise constitutes a full legal raise. A sub-minimum all-in
+                // raise must NOT, matching the AllIn arm below.
+                let raise_increment = new_bet.saturating_sub(previous_current_bet);
+                if raise_increment >= self.min_raise {
+                    self.min_raise = raise_increment.max(self.big_blind);
+                    self.last_raiser_index = Some(self.current_player_index);
+                }
+                self.big_blind_option = false;
+            }
+            PlayerAction::AllIn => {
+                let all_in = chips;
+                let new_bet;
+                if let Some(p) = self.players.get_mut(&player_id) {
+                    p.chips = 0;
+                    p.current_bet = p.current_bet.saturating_add(all_in);
+                    new_bet = p.current_bet;
+                    p.status = PlayerStatus::AllIn;
+                } else {
+                    new_bet = prev_current_bet.saturating_add(all_in);
+                }
+                self.add_to_pot(player_id, all_in);
+                if new_bet > self.current_bet {
+                    // Only reopen betting if the all-in constitutes a full legal
+                    // raise. An all-in never raises the min_raise floor.
+                    let raise_increment = new_bet.saturating_sub(self.current_bet);
+                    if raise_increment >= self.min_raise {
+                        self.last_raiser_index = Some(self.current_player_index);
+                    }
+                    self.current_bet = new_bet;
+                }
+            }
+        }
+
+        self.has_acted_this_round = true;
+        self.next_player();
+        Ok(())
+    }
+
+    /// Add `amount` to the pot and record it against the player's contribution
+    /// ledger (used later for side-pot calculation). Shared by every betting
+    /// arm in [`Self::apply_action`].
+    fn add_to_pot(&mut self, player_id: u32, amount: u32) {
+        self.pot = self.pot.saturating_add(amount);
+        let entry = self.pot_contributions.entry(player_id).or_insert(0);
+        *entry = entry.saturating_add(amount);
+    }
 }
+
+/// Error from [`GameState::apply_action`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionError {
+    /// The game hasn't started.
+    GameNotStarted,
+    /// It isn't this player's turn.
+    NotYourTurn,
+    /// The action isn't in the player's valid set.
+    InvalidAction,
+    /// The player ID isn't seated.
+    PlayerNotFound,
+    /// `Check` was requested with a non-zero amount to call.
+    CannotCheckMustCallOrRaise,
+    /// `Raise` requested with insufficient chips.
+    NotEnoughChips { have: u32, need: u32 },
+    /// `Raise` below the minimum raise floor (and not an all-in).
+    RaiseBelowMinimum { min: u32 },
+}
+
+impl std::fmt::Display for ActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GameNotStarted => f.write_str("Game not started"),
+            Self::NotYourTurn => f.write_str("Not your turn"),
+            Self::InvalidAction => f.write_str("Invalid action"),
+            Self::PlayerNotFound => f.write_str("Player not found"),
+            Self::CannotCheckMustCallOrRaise => f.write_str("Cannot check, must call or raise"),
+            Self::NotEnoughChips { have, need } => {
+                write!(f, "Not enough chips. Have {have}, need {need}")
+            }
+            Self::RaiseBelowMinimum { min } => write!(f, "Minimum raise is {min}"),
+        }
+    }
+}
+
+impl std::error::Error for ActionError {}
 
 #[cfg(test)]
 mod tests {
@@ -1810,6 +2008,181 @@ mod tests {
         let (wid, amount, _rank) = gs.last_winners.first().expect("winner recorded");
         assert_eq!(*wid, 1);
         assert_eq!(*amount, 200);
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_action tests
+    // -----------------------------------------------------------------------
+
+    /// Set up a 2-player PreFlop game with `current_player_index` pointing at
+    /// `actor_id`. Both players Active with plenty of chips.
+    fn heads_up_preflop(actor_id: u32) -> GameState {
+        let mut gs = GameState::new();
+        gs.big_blind = 20;
+        gs.small_blind = 10;
+        gs.game_started = true;
+        gs.phase = GamePhase::PreFlop;
+        for id in [1, 2] {
+            gs.players.insert(
+                id,
+                Player {
+                    id,
+                    name: format!("p{id}"),
+                    chips: 1000,
+                    status: PlayerStatus::Active,
+                    hole_cards: None,
+                    current_bet: 0,
+                    sitting_out: false,
+                },
+            );
+            gs.player_order.push(id);
+        }
+        // Player 1 = dealer/SB, player 2 = BB. Action starts after the BB,
+        // i.e. back on player 1, so make the actor the SB unless overridden.
+        let idx = gs
+            .player_order
+            .iter()
+            .position(|&id| id == actor_id)
+            .expect("actor must be seated");
+        gs.current_player_index = idx;
+        gs.current_bet = gs.big_blind;
+        gs.min_raise = gs.big_blind;
+        gs.has_acted_this_round = false;
+        gs
+    }
+
+    #[test]
+    fn test_apply_action_fold() {
+        let mut gs = heads_up_preflop(1);
+        gs.apply_action(1, PlayerAction::Fold, 0).unwrap();
+        assert_eq!(gs.players.get(&1).unwrap().status, PlayerStatus::Folded);
+        // Turn advanced to the other active player.
+        assert_eq!(gs.current_player_id(), Some(2));
+    }
+
+    #[test]
+    fn test_apply_action_rejects_wrong_player() {
+        let mut gs = heads_up_preflop(1);
+        assert_eq!(
+            gs.apply_action(2, PlayerAction::Check, 0),
+            Err(ActionError::NotYourTurn)
+        );
+    }
+
+    #[test]
+    fn test_apply_action_rejects_invalid_action() {
+        let mut gs = heads_up_preflop(1);
+        // Raise with 0 amount is below the min raise floor and not an all-in.
+        assert_eq!(
+            gs.apply_action(1, PlayerAction::Raise, 0),
+            Err(ActionError::RaiseBelowMinimum { min: 20 })
+        );
+    }
+
+    #[test]
+    fn test_apply_action_call_moves_chips_to_pot() {
+        let mut gs = heads_up_preflop(1);
+        // SB calls the BB: posts the remaining 10 to match the 20 BB.
+        gs.players.get_mut(&1).unwrap().current_bet = 10;
+        let before = gs.players.get(&1).unwrap().chips;
+        gs.apply_action(1, PlayerAction::Call, 0).unwrap();
+        assert_eq!(gs.players.get(&1).unwrap().chips, before - 10);
+        assert_eq!(gs.pot, 10);
+        assert_eq!(*gs.pot_contributions.get(&1).unwrap(), 10);
+        assert_eq!(gs.players.get(&1).unwrap().current_bet, 20);
+    }
+
+    #[test]
+    fn test_apply_action_call_allin_sets_status() {
+        let mut gs = heads_up_preflop(1);
+        // Give the actor exactly the to_call amount so the call empties them.
+        let to_call = gs
+            .current_bet
+            .saturating_sub(gs.players.get(&1).unwrap().current_bet);
+        gs.players.get_mut(&1).unwrap().chips = to_call;
+        gs.apply_action(1, PlayerAction::Call, 0).unwrap();
+        assert_eq!(gs.players.get(&1).unwrap().chips, 0);
+        assert_eq!(gs.players.get(&1).unwrap().status, PlayerStatus::AllIn);
+    }
+
+    #[test]
+    fn test_apply_action_raise_reopens_betting() {
+        let mut gs = heads_up_preflop(1);
+        // Raise by 60 over a 20 current bet → new current_bet 80, increment 60
+        // ≥ min_raise (20), so last_raiser_index is set and min_raise bumps.
+        // Capture the actor's index before the action: apply_action sets
+        // last_raiser_index to the *raisers* index, then advances the turn.
+        let raiser_index = gs.current_player_index;
+        gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
+        assert_eq!(gs.current_bet, 80);
+        assert_eq!(gs.min_raise, 60);
+        assert_eq!(gs.last_raiser_index, Some(raiser_index));
+    }
+
+    #[test]
+    fn test_apply_action_raise_below_minimum_allin_is_allowed() {
+        let mut gs = heads_up_preflop(1);
+        // current_bet 20, player owes 20 (to_call 20), has 25 chips. Raising by
+        // 5 → raise_total 25 == chips (all-in), below the 20 floor. Raise is
+        // still valid (chips 25 > to_call 20), so the all-in carve-out applies:
+        // allowed, and must NOT reopen betting.
+        gs.players.get_mut(&1).unwrap().chips = 25;
+        gs.apply_action(1, PlayerAction::Raise, 5).unwrap();
+        assert_eq!(gs.players.get(&1).unwrap().chips, 0);
+        assert_eq!(gs.players.get(&1).unwrap().status, PlayerStatus::AllIn);
+        // Sub-min all-in raise: last_raiser_index unchanged from the seed (None).
+        assert_eq!(gs.last_raiser_index, None);
+    }
+
+    #[test]
+    fn test_apply_action_allin_below_current_bet_does_not_reopen() {
+        let mut gs = heads_up_preflop(1);
+        // Actor owes 20 (to_call 20) but has only 5 chips. All-in for 5 is
+        // below current_bet, so current_bet must NOT change and betting must
+        // NOT reopen.
+        gs.players.get_mut(&1).unwrap().chips = 5;
+        gs.apply_action(1, PlayerAction::AllIn, 0).unwrap();
+        assert_eq!(gs.players.get(&1).unwrap().chips, 0);
+        assert_eq!(gs.current_bet, 20);
+        assert_eq!(gs.last_raiser_index, None);
+    }
+
+    #[test]
+    fn test_apply_action_check_gated_by_valid_actions() {
+        let mut gs = heads_up_preflop(1);
+        // SB still owes 10 (to_call != 0). valid_actions excludes Check, so
+        // apply_action rejects at the validity guard with InvalidAction before
+        // reaching the Check arm's defensive CannotCheck guard.
+        gs.players.get_mut(&1).unwrap().current_bet = 10;
+        assert_eq!(
+            gs.apply_action(1, PlayerAction::Check, 0),
+            Err(ActionError::InvalidAction)
+        );
+    }
+
+    #[test]
+    fn test_apply_action_game_not_started() {
+        let mut gs = heads_up_preflop(1);
+        gs.game_started = false;
+        assert_eq!(
+            gs.apply_action(1, PlayerAction::Fold, 0),
+            Err(ActionError::GameNotStarted)
+        );
+    }
+
+    #[test]
+    fn test_auto_action_prefers_check() {
+        let mut gs = heads_up_preflop(1);
+        // Match the bet so Check is legal.
+        gs.players.get_mut(&1).unwrap().current_bet = gs.current_bet;
+        assert_eq!(gs.auto_action(1), Some(PlayerAction::Check));
+    }
+
+    #[test]
+    fn test_auto_action_folds_when_check_unavailable() {
+        let gs = heads_up_preflop(1);
+        // SB owes the BB → Check not legal, so auto-folds.
+        assert_eq!(gs.auto_action(1), Some(PlayerAction::Fold));
     }
 
     // -----------------------------------------------------------------------

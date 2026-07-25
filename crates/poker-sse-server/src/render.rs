@@ -228,6 +228,25 @@ fn morph(html: String) -> DatastarEvent {
     PatchElements::new(html).into_datastar_event()
 }
 
+/// Current wall-clock time as epoch milliseconds, or `0` if the clock is before
+/// the epoch (which can't happen on a real machine). Centralises the
+/// `SystemTime::now() → ms` dance shared by the turn-deadline and blinds-timer
+/// render paths.
+pub(crate) fn now_epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// Absolute epoch-ms deadline `now + remaining_ms`. Used to bake a stable,
+/// reconnect-safe countdown into the rendered DOM (the client ticks against
+/// `deadline - Date.now()`), so a re-render re-bakes the same value rather than
+/// restarting the countdown.
+pub(crate) fn epoch_ms_deadline(remaining_ms: u128) -> String {
+    now_epoch_ms().saturating_add(remaining_ms).to_string()
+}
+
 /// Build a `PatchSignals` event from a serializable value. JSON-encoded because
 /// the Datastar client parses signal patches as a JS object literal (JSON is a
 /// strict subset), so escaping is always correct.
@@ -298,12 +317,7 @@ fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
     // computes `deadline - Date.now()` each tick, so a re-baked deadline (same
     // value) never restarts the countdown.
     let deadline_ms = remaining.map_or_else(String::new, |secs| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let ms = u128::from(secs).saturating_mul(1000).saturating_add(now);
-        ms.to_string()
+        epoch_ms_deadline(u128::from(secs).saturating_mul(1000))
     });
     Some(BlindsTimerView {
         small_blind: gs.small_blind,

@@ -32,9 +32,11 @@
     clippy::too_long_first_doc_paragraph
 )]
 
+pub mod flow;
 pub mod handlers;
 pub mod render;
 pub mod room;
+pub mod sse;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -133,7 +135,7 @@ pub fn build_router(config: &ServerConfig) -> Router {
         .route("/poker/manifest.json", get(handlers::manifest))
         .route("/poker/sw.js", get(handlers::service_worker))
         .nest_service("/poker/static", ServeDir::new(&config.static_dir))
-        .route("/poker/events", get(handlers::events))
+        .route("/poker/events", get(sse::events))
         .route("/poker/room/create", post(handlers::room_create))
         .route("/poker/room/join", post(handlers::room_join))
         .route("/poker/room/leave", post(handlers::room_leave))
