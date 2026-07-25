@@ -114,10 +114,7 @@ pub async fn manifest() -> impl IntoResponse {
 #[allow(clippy::unused_async)]
 pub async fn service_worker() -> impl IntoResponse {
     const SW: &str = include_str!("../static/sw.js");
-    let stamped = SW.replace(
-        "__POKER_CACHE_VERSION__",
-        env!("POKER_CACHE_VERSION"),
-    );
+    let stamped = SW.replace("__POKER_CACHE_VERSION__", env!("POKER_CACHE_VERSION"));
     ([(header::CONTENT_TYPE, "application/javascript")], stamped)
 }
 
@@ -372,8 +369,7 @@ pub async fn room_leave(
     // resolution fires) before we mark them as leaving.
     let is_their_turn = {
         let room = ctx.room_arc.lock().await;
-        room.game_state.game_started
-            && room.game_state.current_player_id() == Some(ctx.player_id)
+        room.game_state.game_started && room.game_state.current_player_id() == Some(ctx.player_id)
     };
     if is_their_turn {
         process_action(
@@ -386,7 +382,10 @@ pub async fn room_leave(
         .await;
     }
 
-    let outcome = state.room_manager.leave_room(&ctx.room_id, ctx.player_id).await;
+    let outcome = state
+        .room_manager
+        .leave_room(&ctx.room_id, ctx.player_id)
+        .await;
     tracing::info!(
         room = %ctx.room_id,
         player = ctx.player_id,

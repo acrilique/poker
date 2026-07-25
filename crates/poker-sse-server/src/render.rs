@@ -356,8 +356,8 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
         .iter()
         .filter_map(|&pid| {
             let p = gs.players.get(&pid)?;
-            let in_hand = gs.game_started
-                && !matches!(gs.phase, GamePhase::Lobby | GamePhase::HandOver);
+            let in_hand =
+                gs.game_started && !matches!(gs.phase, GamePhase::Lobby | GamePhase::HandOver);
             let bet = if in_hand {
                 p.current_bet.min(p.chips)
             } else {
@@ -506,11 +506,15 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
 fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
     // A genuine showdown needs at least two players still in (Active/AllIn).
     // Fewer means everyone else folded — a walkover — so don't reveal anything.
-    let eligible_count = gs.player_order.iter().filter(|&&pid| {
-        gs.players
-            .get(&pid)
-            .is_some_and(|p| matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn))
-    }).count();
+    let eligible_count = gs
+        .player_order
+        .iter()
+        .filter(|&&pid| {
+            gs.players
+                .get(&pid)
+                .is_some_and(|p| matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn))
+        })
+        .count();
     if eligible_count < 2 {
         return Vec::new();
     }

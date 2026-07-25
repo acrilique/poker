@@ -480,11 +480,7 @@ impl RoomManager {
         // seat's fate is owned by the leave flag + hand-boundary sweep — a
         // transient drop (the SSE stream tearing down after the leave POST)
         // must not start a grace period that would resurrect them.
-        if room
-            .players
-            .get(&player_id)
-            .is_some_and(|c| c.wants_leave)
-        {
+        if room.players.get(&player_id).is_some_and(|c| c.wants_leave) {
             return;
         }
         if let Some(conn) = room.players.get_mut(&player_id) {
@@ -525,7 +521,8 @@ impl RoomManager {
             } else {
                 LAST_PLAYER_GRACE_PERIOD
             };
-            self.start_grace_period(room, room_id, player_id, grace).await;
+            self.start_grace_period(room, room_id, player_id, grace)
+                .await;
         } else {
             // Game hasn't started — remove immediately.
             remove_player_now(&mut room, room_id, player_id);

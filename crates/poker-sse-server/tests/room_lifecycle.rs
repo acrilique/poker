@@ -199,9 +199,11 @@ async fn heads_up_reload_rejoins_within_grace() {
     state.room_manager.disconnect_player("hu1", pid, 1).await;
     tokio::time::sleep(Duration::from_millis(20)).await;
     // The reload re-attaches the events stream before the short grace expires.
-    let room_arc = state.room_manager.get_room("hu1").await.expect(
-        "room must still exist right after a heads-up disconnect (short grace)",
-    );
+    let room_arc = state
+        .room_manager
+        .get_room("hu1")
+        .await
+        .expect("room must still exist right after a heads-up disconnect (short grace)");
     let (_rx2, _events, gen2) = RoomManager::attach_stream(&room_arc, "hu1", pid, false).await;
 
     let room_arc = state.room_manager.get_room("hu1").await.unwrap();
@@ -313,9 +315,7 @@ async fn ingame_leave_sits_out_and_flags_for_boundary_removal() {
         "leaving mid-hand should sit the player out"
     );
     assert!(
-        room.players
-            .get(&p1)
-            .is_some_and(|c| c.wants_leave),
+        room.players.get(&p1).is_some_and(|c| c.wants_leave),
         "leaving mid-hand should set wants_leave for boundary removal"
     );
     assert!(

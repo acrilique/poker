@@ -46,12 +46,7 @@ pub enum CardSuit {
 
 impl CardSuit {
     /// All suits in standard order
-    pub const ALL: [Self; 4] = [
-        Self::Diamonds,
-        Self::Spades,
-        Self::Clubs,
-        Self::Hearts,
-    ];
+    pub const ALL: [Self; 4] = [Self::Diamonds, Self::Spades, Self::Clubs, Self::Hearts];
 
     /// Numeric index of the suit (0–3), matching the wire-protocol encoding
     /// used by [`CardInfo`](crate::protocol::CardInfo) (Diamonds=0, Spades=1,
@@ -645,7 +640,10 @@ impl Hand {
             && let Some(&bits) = suit_rank_bits.get(fsi)
             && let Some(high) = find_straight_high(bits)
         {
-            let flush_suit = CardSuit::ALL.get(fsi).copied().unwrap_or(CardSuit::Diamonds);
+            let flush_suit = CardSuit::ALL
+                .get(fsi)
+                .copied()
+                .unwrap_or(CardSuit::Diamonds);
             return Some(Self::build_straight(sorted, high, Some(flush_suit)));
         }
 
@@ -671,7 +669,10 @@ impl Hand {
 
         // --- Flush ---
         if let Some(fsi) = flush_suit_idx {
-            let flush_suit = CardSuit::ALL.get(fsi).copied().unwrap_or(CardSuit::Diamonds);
+            let flush_suit = CardSuit::ALL
+                .get(fsi)
+                .copied()
+                .unwrap_or(CardSuit::Diamonds);
             return Some(Self::build_flush(sorted, flush_suit));
         }
 
@@ -718,7 +719,10 @@ impl Hand {
     /// Build a straight (or straight flush if `suit` is Some).
     #[inline]
     fn build_straight(sorted: &[Card], high: CardNumber, suit: Option<CardSuit>) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let suit_filter = |c: &Card| suit.is_none_or(|s| c.suit() == s);
         if high == CardNumber::Five {
@@ -760,7 +764,10 @@ impl Hand {
 
     #[inline]
     fn build_quads(sorted: &[Card], quad_rank: CardNumber) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let mut idx = 0;
         for c in sorted.iter().filter(|c| c.number() == quad_rank) {
@@ -779,7 +786,10 @@ impl Hand {
 
     #[inline]
     fn build_full_house(sorted: &[Card], trips: CardNumber, pair: CardNumber) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let mut idx = 0;
         for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
@@ -799,7 +809,10 @@ impl Hand {
 
     #[inline]
     fn build_flush(sorted: &[Card], suit: CardSuit) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         for (idx, c) in sorted
             .iter()
@@ -816,7 +829,10 @@ impl Hand {
 
     #[inline]
     fn build_trips(sorted: &[Card], trips: CardNumber) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let mut idx = 0;
         for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
@@ -836,7 +852,10 @@ impl Hand {
 
     #[inline]
     fn build_two_pair(sorted: &[Card], p1: CardNumber, p2: CardNumber) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let mut idx = 0;
         for c in sorted.iter().filter(|c| c.number() == p1).take(2) {
@@ -865,7 +884,10 @@ impl Hand {
 
     #[inline]
     fn build_one_pair(sorted: &[Card], pair: CardNumber) -> FullHand {
-        let first = sorted.first().copied().unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
+        let first = sorted
+            .first()
+            .copied()
+            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
         let mut result = [first; 5];
         let mut idx = 0;
         for c in sorted.iter().filter(|c| c.number() == pair).take(2) {
@@ -908,7 +930,9 @@ const fn suit_ordinal(suit: CardSuit) -> usize {
 fn rank_from_val(val: usize) -> CardNumber {
     // val is always 2..=14 at the call sites; clamp defensively so the slice
     // access can't panic.
-    let idx = val.saturating_sub(2).min(CardNumber::ALL.len().saturating_sub(1));
+    let idx = val
+        .saturating_sub(2)
+        .min(CardNumber::ALL.len().saturating_sub(1));
     CardNumber::ALL.get(idx).copied().unwrap_or(CardNumber::Two)
 }
 
@@ -920,9 +944,7 @@ fn find_straight_high(rank_bits: u16) -> Option<CardNumber> {
     for high in (6u8..=14).rev() {
         // high is 6..=14, so high-4 is 2..=10: no underflow.
         let shift = u32::from(high.checked_sub(4).unwrap_or(2));
-        let mask: u16 = 0x1F_u16
-            .checked_shl(shift)
-            .unwrap_or(0);
+        let mask: u16 = 0x1F_u16.checked_shl(shift).unwrap_or(0);
         if rank_bits & mask == mask {
             return Some(rank_from_val(usize::from(high)));
         }
@@ -983,7 +1005,10 @@ fn draw_cards(deck: &[Card], offset: usize, count: usize) -> ([Card; 3], usize) 
     let mut out = [DUMMY_CARD; 3];
     for k in 0..count {
         if let Some(slot) = out.get_mut(k) {
-            *slot = deck.get(offset.saturating_add(k)).copied().unwrap_or(DUMMY_CARD);
+            *slot = deck
+                .get(offset.saturating_add(k))
+                .copied()
+                .unwrap_or(DUMMY_CARD);
         }
     }
     (out, offset.saturating_add(count))
@@ -1078,7 +1103,10 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
     let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
     let mut deck_size = 0usize;
     for c in &all_cards {
-        if !known.get(..known_len).is_some_and(|slice| slice.contains(c)) {
+        if !known
+            .get(..known_len)
+            .is_some_and(|slice| slice.contains(c))
+        {
             if let Some(slot) = deck_template.get_mut(deck_size) {
                 *slot = *c;
             }
@@ -1176,7 +1204,10 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
     let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
     let mut deck_size = 0usize;
     for c in &all_cards {
-        if !known.get(..known_len).is_some_and(|slice| slice.contains(c)) {
+        if !known
+            .get(..known_len)
+            .is_some_and(|slice| slice.contains(c))
+        {
             if let Some(slot) = deck_template.get_mut(deck_size) {
                 *slot = *c;
             }

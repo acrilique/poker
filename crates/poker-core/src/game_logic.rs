@@ -1795,7 +1795,11 @@ mod tests {
 
         // Phase must move off River to HandOver — staying on River is the bug
         // that lit up a phantom turn/timer/action bar during the pre-deal wait.
-        assert_eq!(gs.phase, GamePhase::HandOver, "phase must be HandOver after resolve");
+        assert_eq!(
+            gs.phase,
+            GamePhase::HandOver,
+            "phase must be HandOver after resolve"
+        );
         assert!(
             msgs.iter()
                 .all(|m| !matches!(m, ServerMessage::GameOver { .. })),
@@ -1803,10 +1807,7 @@ mod tests {
         );
         // Alice (royal flush) wins the 200 pot.
         assert_eq!(gs.last_winners.len(), 1);
-        let (wid, amount, _rank) = gs
-            .last_winners
-            .get(0)
-            .expect("winner recorded");
+        let (wid, amount, _rank) = gs.last_winners.get(0).expect("winner recorded");
         assert_eq!(*wid, 1);
         assert_eq!(*amount, 200);
     }

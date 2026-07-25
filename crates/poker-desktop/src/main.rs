@@ -184,9 +184,7 @@ fn main() {
     let webview = {
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        let container = window
-            .default_vbox()
-            .expect("window has no default vbox");
+        let container = window.default_vbox().expect("window has no default vbox");
         webview.build_gtk(container)
     };
     #[cfg(not(target_os = "linux"))]
@@ -534,11 +532,7 @@ fn decode_prompt_result(raw: &str) -> Option<String> {
             url.push(c);
         }
     }
-    if url.is_empty() {
-        None
-    } else {
-        Some(url)
-    }
+    if url.is_empty() { None } else { Some(url) }
 }
 
 /// Build the JavaScript that shows a self-contained, selectable invite overlay.
@@ -632,4 +626,3 @@ fn inject_invite_overlay(invite_url: &str) -> String {
 }})();"
     )
 }
-
