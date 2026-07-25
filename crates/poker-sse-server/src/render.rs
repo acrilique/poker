@@ -342,8 +342,11 @@ fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
 /// `render_player_list`. Split out so the two public renderers stay in sync.
 fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
     let gs = ctx.gs;
-    let turn_pid = if gs.game_started && !matches!(gs.phase, GamePhase::Lobby | GamePhase::Showdown)
-    {
+    let turn_pid = if gs.game_started
+        && !matches!(
+            gs.phase,
+            GamePhase::Lobby | GamePhase::Showdown | GamePhase::HandOver
+        ) {
         gs.current_player_id()
     } else {
         None
@@ -353,7 +356,8 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
         .iter()
         .filter_map(|&pid| {
             let p = gs.players.get(&pid)?;
-            let in_hand = gs.game_started && !matches!(gs.phase, GamePhase::Lobby);
+            let in_hand = gs.game_started
+                && !matches!(gs.phase, GamePhase::Lobby | GamePhase::HandOver);
             let bet = if in_hand {
                 p.current_bet.min(p.chips)
             } else {
@@ -443,9 +447,11 @@ fn render_player_list(ctx: &Ctx, viewer: u32) -> String {
 }
 
 fn render_table(ctx: &Ctx, viewer: u32) -> String {
-    // At showdown, reveal every non-folded player's hole cards and rank from
-    // the settled state.
-    let showdown = if matches!(ctx.gs.phase, GamePhase::Showdown) {
+    // Reveal non-folded players' hole cards and rank once the hand is decided:
+    // during the all-in run-out (`Showdown`) and the post-resolve wait
+    // (`HandOver`). `build_showdown_overlay` guards the fold-out case (a lone
+    // survivor) so a walkover doesn't auto-expose the winner's cards.
+    let showdown = if matches!(ctx.gs.phase, GamePhase::Showdown | GamePhase::HandOver) {
         build_showdown_overlay(ctx.gs, viewer)
     } else {
         Vec::new()
@@ -475,6 +481,7 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
         GamePhase::Turn => "Turn",
         GamePhase::River => "River",
         GamePhase::Showdown => "Showdown",
+        GamePhase::HandOver => "Hand Over",
     }
     .to_string();
 
@@ -495,9 +502,19 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
 }
 
 /// Build the showdown overlay from settled state: every Active/AllIn player's
-/// revealed hole cards and made-hand rank. `line2` (the won amount) is left to
-/// the winner log line — the per-winner split isn't derivable here.
+/// revealed hole cards and made-hand rank, plus the amount each won (`line2`).
 fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
+    // A genuine showdown needs at least two players still in (Active/AllIn).
+    // Fewer means everyone else folded — a walkover — so don't reveal anything.
+    let eligible_count = gs.player_order.iter().filter(|&&pid| {
+        gs.players
+            .get(&pid)
+            .is_some_and(|p| matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn))
+    }).count();
+    if eligible_count < 2 {
+        return Vec::new();
+    }
+
     let board = gs.build_board();
     gs.player_order
         .iter()
@@ -516,12 +533,18 @@ fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
                 .best(&board)
                 .map(|full| format!("{}", full.rank()))
                 .or_else(|| Some("Unknown".to_string()));
+            // Won amount for this player from the resolved hand, if any.
+            let line2 = gs
+                .last_winners
+                .iter()
+                .find(|(wid, _, _)| *wid == pid)
+                .map(|(_, amount, _)| format!("+{amount}"));
             Some(ShowdownHand {
                 name: p.name.clone(),
                 is_us: pid == viewer,
                 cards,
                 line1,
-                line2: None,
+                line2,
             })
         })
         .collect()

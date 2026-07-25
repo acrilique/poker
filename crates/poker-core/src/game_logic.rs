@@ -78,6 +78,7 @@ pub enum GamePhase {
     Turn,
     River,
     Showdown,
+    HandOver,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,11 @@ pub struct GameState {
     /// Total chips each player has contributed to the pot in the current hand
     /// (across all betting rounds).  Used for side-pot calculation.
     pub pot_contributions: HashMap<u32, u32>,
+    /// Winners of the most recently resolved hand: `(player_id, amount_won,
+    /// hand_description)`. Populated by [`Self::resolve_hand`], cleared by
+    /// [`Self::start_new_hand`]. The UI reads it during [`GamePhase::HandOver`]
+    /// to show who won how much while waiting for the next deal.
+    pub last_winners: Vec<(u32, u32, String)>,
 }
 
 impl Default for GameState {
@@ -173,6 +179,7 @@ impl Default for GameState {
             starting_big_blind: 0,
             waiting_for_players: false,
             pot_contributions: HashMap::new(),
+            last_winners: Vec::new(),
         }
     }
 }
@@ -352,6 +359,7 @@ impl GameState {
         self.phase = GamePhase::PreFlop;
         self.pot = 0;
         self.pot_contributions.clear();
+        self.last_winners.clear();
         self.current_bet = 0;
         self.community_cards.clear();
         self.new_deck();
@@ -878,6 +886,8 @@ impl GameState {
             }
         }
 
+        self.last_winners.clone_from(&winners);
+
         messages.push(ServerMessage::RoundWinner { winners });
 
         for player in self.players.values() {
@@ -894,6 +904,8 @@ impl GameState {
                 });
             }
         }
+
+        self.phase = GamePhase::HandOver;
 
         let remaining: Vec<&Player> = self.players.values().filter(|p| p.chips > 0).collect();
 
@@ -1749,5 +1761,88 @@ mod tests {
         gs.remove_player(host);
         assert_eq!(gs.promote_next_host(host), None);
         assert!(gs.player_order.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 13: A resolved hand lands in HandOver (not stuck on River) and
+    // records its winners; the next deal clears both.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resolve_hand_lands_in_handover_with_winners() {
+        // Three players still in (genuine showdown), two will hold chips after
+        // the pot is awarded → not game over. Pre-resolve, simulate a river
+        // check-down by starting from the Showdown-ish setup_game helper.
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    200,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (2, "Bob", 100, PlayerStatus::Active, Some(low_hand()), 100),
+                (3, "Charlie", 50, PlayerStatus::Folded, None, 0),
+            ],
+            standard_board(),
+        );
+        gs.game_started = true;
+        gs.hand_number = 5;
+        gs.phase = GamePhase::River;
+
+        let msgs = gs.resolve_hand();
+
+        // Phase must move off River to HandOver — staying on River is the bug
+        // that lit up a phantom turn/timer/action bar during the pre-deal wait.
+        assert_eq!(gs.phase, GamePhase::HandOver, "phase must be HandOver after resolve");
+        assert!(
+            msgs.iter()
+                .all(|m| !matches!(m, ServerMessage::GameOver { .. })),
+            "not game over — two players still hold chips"
+        );
+        // Alice (royal flush) wins the 200 pot.
+        assert_eq!(gs.last_winners.len(), 1);
+        let (wid, amount, _rank) = gs
+            .last_winners
+            .get(0)
+            .expect("winner recorded");
+        assert_eq!(*wid, 1);
+        assert_eq!(*amount, 200);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 14: start_new_hand clears the HandOver phase and last_winners.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_start_new_hand_clears_handover() {
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    200,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (2, "Bob", 100, PlayerStatus::Active, Some(low_hand()), 100),
+            ],
+            standard_board(),
+        );
+        gs.game_started = true;
+        gs.hand_number = 5;
+        gs.phase = GamePhase::River;
+
+        let _ = gs.resolve_hand();
+        assert_eq!(gs.phase, GamePhase::HandOver);
+        assert!(!gs.last_winners.is_empty());
+
+        let _ = gs.start_new_hand();
+        assert_eq!(gs.phase, GamePhase::PreFlop, "new deal must clear HandOver");
+        assert!(
+            gs.last_winners.is_empty(),
+            "last_winners must be cleared by the next deal"
+        );
     }
 }
