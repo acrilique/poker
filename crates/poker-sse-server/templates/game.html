@@ -1,0 +1,11 @@
+<div id="game-root" class="game-layout portrait-rotate">
+  <aside class="sidebar">
+    {{ player_list|safe }}
+    {{ controls|safe }}
+  </aside>
+  <main class="main-area">
+    {{ table|safe }}
+    {{ hole_cards|safe }}
+    {{ action_bar|safe }}
+  </main>
+</div>

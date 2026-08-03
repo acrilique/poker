@@ -7,7 +7,7 @@ A multiplayer Texas Hold'em poker app with two frontends (web, TUI) connecting t
 | Crate | Description |
 |-------|-------------|
 | `poker-core` | Core game logic, protocol types, and transport abstraction |
-| `poker-server` | Multi-room Axum server with WebSocket support |
+| `poker-ws-server` | Multi-room Axum server with WebSocket support |
 | `poker-client` | Client-side networking, game state, session persistence, and reconnection logic |
 | `poker-ui` | Platform-agnostic Dioxus UI components and application lifecycle |
 | `poker-web` | Thin Dioxus web + PWA shell (WASM) |
@@ -30,10 +30,10 @@ This produces a `dist/` directory with the static web assets.
 
 ```bash
 # From the workspace root:
-cargo build -p poker-server --release
+cargo build -p poker-ws-server --release
 
 # Serve the web frontend from the dist/ directory:
-STATIC_DIR=crates/poker-web/dist ./target/release/poker-server
+STATIC_DIR=crates/poker-web/dist ./target/release/poker-ws-server
 ```
 
 The server listens on `0.0.0.0:8080` by default. Configure with:
@@ -65,7 +65,7 @@ cargo check
 cargo test
 
 # Run the server in dev mode:
-cargo run -p poker-server
+cargo run -p poker-ws-server
 
 # Build the web frontend in dev mode:
 cd crates/poker-web && dx serve

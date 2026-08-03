@@ -28,7 +28,6 @@
 //!
 //! Set `STATIC_DIR` to point at the combined static output (default: `./dist`).
 
-mod game_logic;
 mod room;
 mod ws_handler;
 

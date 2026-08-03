@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
-use crate::game_logic::{GamePhase, GameState, PlayerStatus};
+use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_core::protocol::{
     BlindConfig, CardInfo, PlayerInfo, RoomErrorKind, RoomIdError, ServerMessage, Stage,
     card_to_info, validate_room_id,

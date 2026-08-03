@@ -1,0 +1,54 @@
+[package]
+name = "poker-sse-server"
+version = "0.1.0"
+edition = "2024"
+description = "Multi-room Axum-based poker server using Datastar (SSE + CQRS)"
+license = "MIT"
+
+[dependencies]
+poker-core = { path = "../poker-core" }
+
+askama = "0.16"
+axum = "0.8"
+datastar = { version = "0.3", features = ["axum"] }
+futures-util = "0.3"
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["fs", "cors", "compression-br", "compression-gzip"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+brotli = "8"
+flate2 = "1"
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+tower-http = { version = "0.6", features = ["compression-br", "compression-gzip"] }
+
+[[example]]
+name = "measure-payloads"
+path = "examples/measure_payloads.rs"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# DENY PANICS:
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"

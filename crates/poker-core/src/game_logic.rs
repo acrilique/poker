@@ -18,14 +18,14 @@
 //! Server-side game logic: types, state management, and betting rules.
 //!
 //! This module is transport-agnostic — it knows nothing about TCP, channels,
-//! or serialization.  The [`server`](crate::server) module wires it up to a
-//! concrete transport.
+//! or serialization. The transport layer (WebSocket or SSE server) wires it
+//! up to a concrete connection.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use poker_core::poker::{Board, Card, Hand, get_all_cards};
-use poker_core::protocol::{
+use crate::poker::{Board, Card, Hand, get_all_cards};
+use crate::protocol::{
     BlindConfig, CardInfo, PlayerAction, ServerMessage, Stage, card_to_info,
 };
 use rand::rng;
@@ -87,6 +87,13 @@ pub enum GamePhase {
 // ---------------------------------------------------------------------------
 
 /// Server-side game state shared across all connections.
+///
+/// The five independent boolean flags (`game_started`, `big_blind_option`,
+/// `has_acted_this_round`, `allow_late_entry`, `waiting_for_players`) are each
+/// semantically distinct engine state accessed directly at ~100 sites across
+/// both transports; grouping them would obscure the state machine without a
+/// correctness benefit, so the bool cap is relaxed here.
+#[allow(clippy::struct_excessive_bools)]
 pub struct GameState {
     pub players: HashMap<u32, Player>,
     /// Order of play (seat positions).
@@ -172,6 +179,17 @@ impl Default for GameState {
     }
 }
 
+/// `(base + offset) mod seats`, computed with checked arithmetic so it can't
+/// overflow or divide by zero. Returns `0` when `seats == 0`.
+const fn next_seat(base: usize, offset: usize, seats: usize) -> usize {
+    if seats == 0 {
+        return 0;
+    }
+    base.rem_euclid(seats)
+        .saturating_add(offset)
+        .rem_euclid(seats)
+}
+
 impl GameState {
     pub fn new() -> Self {
         Self::default()
@@ -188,7 +206,8 @@ impl GameState {
         } else {
             self.big_blind
         };
-        let starting_chips = chips_override.unwrap_or(self.starting_bbs * bb);
+        let starting_chips =
+            chips_override.unwrap_or_else(|| self.starting_bbs.saturating_mul(bb));
         let player = Player {
             id: self.next_player_id,
             name,
@@ -200,7 +219,7 @@ impl GameState {
         };
         self.players.insert(player.id, player.clone());
         self.player_order.push(player.id);
-        self.next_player_id += 1;
+        self.next_player_id = self.next_player_id.saturating_add(1);
         player
     }
 
@@ -231,8 +250,7 @@ impl GameState {
     pub fn is_current_player_sitting_out(&self) -> bool {
         self.current_player_id()
             .and_then(|id| self.players.get(&id))
-            .map(|p| p.sitting_out)
-            .unwrap_or(false)
+            .is_some_and(|p| p.sitting_out)
     }
 
     /// Get active players (not folded, not out).
@@ -243,6 +261,19 @@ impl GameState {
             .count()
     }
 
+    /// Whether the game has reached a terminal state. The engine sets
+    /// `game_started = false` and `phase = Lobby` only in [`resolve_hand`],
+    /// once a single player holds all the chips. A game that never started
+    /// (`hand_number == 0`) is not "over".
+    #[allow(dead_code, reason = "used by the poker-sse-server crate; the WS server has no equivalent call site yet")]
+    pub const fn is_game_over(&self) -> bool {
+        // Note: no call site lives inside poker-core itself; both server crates
+        // consume this from their transport layers.
+        !self.game_started
+            && matches!(self.phase, GamePhase::Lobby)
+            && self.hand_number > 0
+    }
+
     /// Get players who can still act (active but not all-in).
     pub fn actionable_players(&self) -> Vec<u32> {
         self.player_order
@@ -250,8 +281,7 @@ impl GameState {
             .filter(|&&id| {
                 self.players
                     .get(&id)
-                    .map(|p| p.status == PlayerStatus::Active)
-                    .unwrap_or(false)
+                    .is_some_and(|p| p.status == PlayerStatus::Active)
             })
             .copied()
             .collect()
@@ -273,17 +303,32 @@ impl GameState {
     pub fn start_new_hand(&mut self) -> Vec<ServerMessage> {
         let mut messages = Vec::new();
 
-        // Check if blinds should increase.
-        if self.blind_config.is_enabled() {
-            let should_increase = match self.last_blind_increase {
-                Some(last) => last.elapsed().as_secs() >= self.blind_config.interval_secs,
-                None => false, // first hand — initialised on game start
-            };
-            if should_increase {
-                let pct = self.blind_config.increase_percent;
-                self.small_blind = self.small_blind + (self.small_blind * pct).div_ceil(100);
-                self.big_blind = self.big_blind + (self.big_blind * pct).div_ceil(100);
-                self.last_blind_increase = Some(Instant::now());
+        // Blind increases run on a wall-clock schedule anchored to game start.
+        // Players don't see a step until the next hand (when blinds are posted).
+        // The anchor advances by exactly one interval per increase and the loop
+        // catches up all missed levels after a long pause or a hand spanning
+        // multiple intervals. Resetting to `Instant::now()` on each step would
+        // drift and drop skipped levels.
+        if self.blind_config.is_enabled()
+            && let Some(mut last) = self.last_blind_increase
+        {
+            let interval = Duration::from_secs(self.blind_config.interval_secs);
+            let pct = self.blind_config.increase_percent;
+            while last.elapsed() >= interval {
+                self.small_blind = self
+                    .small_blind
+                    .saturating_add(self.small_blind.saturating_mul(pct).div_ceil(100));
+                self.big_blind = self
+                    .big_blind
+                    .saturating_add(self.big_blind.saturating_mul(pct).div_ceil(100));
+                // Advance the anchor by exactly one interval to stay anchored
+                // to game start. `checked_add` is None only near a
+                // monotonically-distant future; in that case stop.
+                let Some(next) = last.checked_add(interval) else {
+                    break;
+                };
+                last = next;
+                self.last_blind_increase = Some(last);
                 messages.push(ServerMessage::BlindsIncreased {
                     small_blind: self.small_blind,
                     big_blind: self.big_blind,
@@ -291,7 +336,7 @@ impl GameState {
             }
         }
 
-        self.hand_number += 1;
+        self.hand_number = self.hand_number.saturating_add(1);
         self.phase = GamePhase::PreFlop;
         self.pot = 0;
         self.pot_contributions.clear();
@@ -312,22 +357,30 @@ impl GameState {
 
         // Remove eliminated players from order
         self.player_order
-            .retain(|&id| self.players.get(&id).map(|p| p.chips > 0).unwrap_or(false));
+            .retain(|&id| self.players.get(&id).is_some_and(|p| p.chips > 0));
 
         if self.player_order.len() < 2 {
             return messages;
         }
 
         // Move dealer button
-        self.dealer_index = (self.dealer_index + 1) % self.player_order.len();
+        self.dealer_index = next_seat(self.dealer_index, 1, self.player_order.len());
 
         // Determine blinds positions
-        let sb_index = (self.dealer_index + 1) % self.player_order.len();
-        let bb_index = (self.dealer_index + 2) % self.player_order.len();
+        let sb_index = next_seat(self.dealer_index, 1, self.player_order.len());
+        let bb_index = next_seat(self.dealer_index, 2, self.player_order.len());
 
-        let dealer_id = self.player_order[self.dealer_index];
-        let sb_id = self.player_order[sb_index];
-        let bb_id = self.player_order[bb_index];
+        // The ≥ 2 player guard above guarantees these seats exist; extract them
+        // without indexing so a future change to that guard can't panic here.
+        let Some(dealer_id) = self.player_order.get(self.dealer_index).copied() else {
+            return messages;
+        };
+        let Some(sb_id) = self.player_order.get(sb_index).copied() else {
+            return messages;
+        };
+        let Some(bb_id) = self.player_order.get(bb_index).copied() else {
+            return messages;
+        };
 
         // Post blinds
         self.post_blind(sb_id, self.small_blind);
@@ -336,7 +389,7 @@ impl GameState {
         self.min_raise = self.big_blind;
 
         // Action starts after big blind
-        self.current_player_index = (bb_index + 1) % self.player_order.len();
+        self.current_player_index = next_seat(bb_index, 1, self.player_order.len());
         self.last_raiser_index = Some(bb_index);
         self.big_blind_option = true;
         self.first_actor_index = Some(self.current_player_index);
@@ -356,17 +409,22 @@ impl GameState {
             .player_order
             .iter()
             .filter(|&&id| {
-                self.players
-                    .get(&id)
-                    .map(|p| p.status == PlayerStatus::Active || p.status == PlayerStatus::AllIn)
-                    .unwrap_or(false)
+                self.players.get(&id).is_some_and(|p| {
+                    p.status == PlayerStatus::Active || p.status == PlayerStatus::AllIn
+                })
             })
             .copied()
             .collect();
 
         for player_id in players_to_deal {
-            let c1 = self.deal_card().unwrap();
-            let c2 = self.deal_card().unwrap();
+            // The freshly shuffled 52-card deck always holds enough cards for
+            // the capped player count, but deal defensively rather than panic.
+            let Some(c1) = self.deal_card() else {
+                break;
+            };
+            let Some(c2) = self.deal_card() else {
+                break;
+            };
             if let Some(player) = self.players.get_mut(&player_id) {
                 player.hole_cards = Some((c1, c2));
             }
@@ -378,10 +436,11 @@ impl GameState {
     fn post_blind(&mut self, player_id: u32, amount: u32) {
         if let Some(player) = self.players.get_mut(&player_id) {
             let actual = amount.min(player.chips);
-            player.chips -= actual;
+            player.chips = player.chips.saturating_sub(actual);
             player.current_bet = actual;
-            self.pot += actual;
-            *self.pot_contributions.entry(player_id).or_insert(0) += actual;
+            self.pot = self.pot.saturating_add(actual);
+            let entry = self.pot_contributions.entry(player_id).or_insert(0);
+            *entry = entry.saturating_add(actual);
             if player.chips == 0 {
                 player.status = PlayerStatus::AllIn;
             }
@@ -428,8 +487,7 @@ impl GameState {
             let raiser_id = self.player_order.get(raiser_idx).copied();
             let raiser_can_act = raiser_id
                 .and_then(|id| self.players.get(&id))
-                .map(|p| p.status == PlayerStatus::Active)
-                .unwrap_or(false);
+                .is_some_and(|p| p.status == PlayerStatus::Active);
 
             if raiser_can_act && self.current_player_index != raiser_idx {
                 return false;
@@ -452,12 +510,11 @@ impl GameState {
                     .player_order
                     .get(sentinel)
                     .and_then(|&id| self.players.get(&id))
-                    .map(|p| p.status == PlayerStatus::Active)
-                    .unwrap_or(false)
+                    .is_some_and(|p| p.status == PlayerStatus::Active)
                 {
                     break;
                 }
-                sentinel = (sentinel + 1) % self.player_order.len();
+                sentinel = next_seat(sentinel, 1, self.player_order.len());
             }
             return self.current_player_index == sentinel;
         }
@@ -469,7 +526,8 @@ impl GameState {
     pub fn next_player(&mut self) {
         let start = self.current_player_index;
         loop {
-            self.current_player_index = (self.current_player_index + 1) % self.player_order.len();
+            self.current_player_index =
+                next_seat(self.current_player_index, 1, self.player_order.len());
 
             if let Some(player) = self
                 .player_order
@@ -498,7 +556,7 @@ impl GameState {
         self.big_blind_option = false;
         self.has_acted_this_round = false;
 
-        self.current_player_index = (self.dealer_index + 1) % self.player_order.len();
+        self.current_player_index = next_seat(self.dealer_index, 1, self.player_order.len());
 
         let start = self.current_player_index;
         loop {
@@ -510,7 +568,8 @@ impl GameState {
             {
                 break;
             }
-            self.current_player_index = (self.current_player_index + 1) % self.player_order.len();
+            self.current_player_index =
+                next_seat(self.current_player_index, 1, self.player_order.len());
             if self.current_player_index == start {
                 break;
             }
@@ -583,14 +642,14 @@ impl GameState {
 
         // Unique contribution levels, ascending.
         let mut levels: Vec<u32> = contributions.iter().map(|(_, a)| *a).collect();
-        levels.sort();
+        levels.sort_unstable();
         levels.dedup();
 
         let mut side_pots: Vec<(u32, Vec<u32>)> = Vec::new();
         let mut prev_level = 0u32;
 
         for &level in &levels {
-            let layer = level - prev_level;
+            let layer = level.saturating_sub(prev_level);
             if layer == 0 {
                 continue;
             }
@@ -598,7 +657,8 @@ impl GameState {
             // How many players contributed at least `level` chips total?
             let contributors: usize = contributions.iter().filter(|(_, a)| *a >= level).count();
 
-            let pot_amount = layer * u32::try_from(contributors).unwrap();
+            let contributors_u32 = u32::try_from(contributors).unwrap_or(0);
+            let pot_amount = layer.saturating_mul(contributors_u32);
 
             // Only non-folded players who contributed at least `level` are
             // eligible to *win* this sub-pot.
@@ -606,13 +666,9 @@ impl GameState {
                 .iter()
                 .filter(|(id, a)| {
                     *a >= level
-                        && self
-                            .players
-                            .get(id)
-                            .map(|p| {
-                                p.status == PlayerStatus::Active || p.status == PlayerStatus::AllIn
-                            })
-                            .unwrap_or(false)
+                        && self.players.get(id).is_some_and(|p| {
+                            p.status == PlayerStatus::Active || p.status == PlayerStatus::AllIn
+                        })
                 })
                 .map(|(id, _)| *id)
                 .collect();
@@ -641,7 +697,7 @@ impl GameState {
             .collect();
 
         if eligible_hands.len() <= 1 {
-            let id = eligible_hands.first().map(|(id, _, _)| *id).unwrap_or(0);
+            let id = eligible_hands.first().map_or(0, |(id, _, _)| *id);
             return (vec![id], "Winner".to_string());
         }
 
@@ -657,7 +713,7 @@ impl GameState {
                     continue;
                 }
                 if let (Some(fi), Some(fj)) = (&full_i, &hand_j.best(board)) {
-                    use poker_core::poker::Winner;
+                    use crate::poker::Winner;
                     if fi.compare(fj) == Winner::Hand2 {
                         is_winner = false;
                         break;
@@ -674,6 +730,31 @@ impl GameState {
         }
 
         (winning_ids, best_rank)
+    }
+
+    /// Split `total` chips evenly across `winners`; odd chips go to the lowest
+    /// player IDs. Accumulates into `winnings` keyed by player ID. Arithmetic
+    /// is saturating/checked, so this can't panic or overflow.
+    fn award_split(
+        winnings: &mut HashMap<u32, (u32, String)>,
+        total: u32,
+        winners: &[u32],
+        rank: &str,
+    ) {
+        let Ok(count_u32) = u32::try_from(winners.len()) else {
+            return;
+        };
+        // `checked_div`/`checked_rem` are None only on divide-by-zero; count is
+        // ≥ 1 here (an empty winners slice is a no-op below), so the unwrap is
+        // safe and avoids the side-effect-flagging `/` and `%`.
+        let count = count_u32.max(1);
+        let share = total.checked_div(count).unwrap_or(0);
+        let remainder = total.checked_rem(count).unwrap_or(0);
+        for (i, id) in winners.iter().enumerate() {
+            let extra = u32::try_from(i).map_or(0, |i| u32::from(i < remainder));
+            let entry = winnings.entry(*id).or_insert_with(|| (0, rank.to_string()));
+            entry.0 = entry.0.saturating_add(share).saturating_add(extra);
+        }
     }
 
     /// Determine winner(s) and distribute pot using side-pot logic.
@@ -703,18 +784,19 @@ impl GameState {
 
         if hands_to_show.len() == 1 {
             // Everyone else folded — sole survivor takes the whole pot.
-            let (id, _, _) = &hands_to_show[0];
+            let Some((id, _, _)) = hands_to_show.first() else {
+                return messages;
+            };
             winnings.insert(*id, (self.pot, "Winner".to_string()));
         } else {
             // Emit showdown message so clients see all hands.
             let showdown_hands: Vec<(u32, [CardInfo; 2], String)> = hands_to_show
                 .iter()
                 .map(|(id, cards, hand)| {
-                    let rank = if let Some(full) = hand.best(&board) {
-                        format!("{}", full.rank())
-                    } else {
-                        "Unknown".to_string()
-                    };
+                    let rank = hand.best(&board).map_or_else(
+                        || "Unknown".to_string(),
+                        |full| format!("{}", full.rank()),
+                    );
                     (*id, *cards, rank)
                 })
                 .collect();
@@ -740,34 +822,23 @@ impl GameState {
                 if eligible.is_empty() {
                     // All contributors at this tier folded — accumulate as
                     // dead money for the next contested pot.
-                    carry_over += pot_amount;
+                    carry_over = carry_over.saturating_add(*pot_amount);
                     continue;
                 }
 
                 let (pot_winners, rank) = Self::find_pot_winners(&hands_to_show, eligible, &board);
 
                 if pot_winners.is_empty() {
-                    carry_over += pot_amount;
+                    carry_over = carry_over.saturating_add(*pot_amount);
                     continue;
                 }
 
                 // Include any accumulated dead money from previous
                 // uncontested pots.
-                let total = pot_amount + carry_over;
+                let total = pot_amount.saturating_add(carry_over);
                 carry_over = 0;
 
-                let num_winners = u32::try_from(pot_winners.len()).unwrap();
-                let share = total / num_winners;
-                let remainder = total % num_winners;
-                for (i, id) in pot_winners.iter().enumerate() {
-                    let entry = winnings.entry(*id).or_insert((0, rank.clone()));
-                    entry.0 += share
-                        + if u32::try_from(i).unwrap() < remainder {
-                            1
-                        } else {
-                            0
-                        };
-                }
+                Self::award_split(&mut winnings, total, &pot_winners, &rank);
 
                 last_winners = pot_winners;
                 last_rank = rank;
@@ -776,18 +847,7 @@ impl GameState {
             // If there's still dead money left over (the highest side pot(s)
             // had no eligible winners), give it to the last known winners.
             if carry_over > 0 && !last_winners.is_empty() {
-                let num = u32::try_from(last_winners.len()).unwrap();
-                let share = carry_over / num;
-                let remainder = carry_over % num;
-                for (i, id) in last_winners.iter().enumerate() {
-                    let entry = winnings.entry(*id).or_insert((0, last_rank.clone()));
-                    entry.0 += share
-                        + if u32::try_from(i).unwrap() < remainder {
-                            1
-                        } else {
-                            0
-                        };
-                }
+                Self::award_split(&mut winnings, carry_over, &last_winners, &last_rank);
             }
         }
 
@@ -797,11 +857,11 @@ impl GameState {
             .map(|(id, (amount, rank))| (id, amount, rank))
             .collect();
         // Sort by player ID for deterministic ordering.
-        winners.sort_by_key(|(id, _, _)| *id);
+        winners.sort_unstable_by_key(|(id, _, _)| *id);
 
         for (winner_id, amount, _) in &winners {
             if let Some(player) = self.players.get_mut(winner_id) {
-                player.chips += amount;
+                player.chips = player.chips.saturating_add(*amount);
             }
         }
 
@@ -824,10 +884,10 @@ impl GameState {
 
         let remaining: Vec<&Player> = self.players.values().filter(|p| p.chips > 0).collect();
 
-        if remaining.len() == 1 {
+        if let Some(winner) = remaining.first() {
             messages.push(ServerMessage::GameOver {
-                winner_id: remaining[0].id,
-                winner_name: remaining[0].name.clone(),
+                winner_id: winner.id,
+                winner_name: winner.name.clone(),
             });
             self.game_started = false;
             self.phase = GamePhase::Lobby;
@@ -839,14 +899,9 @@ impl GameState {
 
     /// Build a [`Board`] from the current community cards.
     pub fn build_board(&self) -> Board {
-        let flop = if self.community_cards.len() >= 3 {
-            Some((
-                self.community_cards[0],
-                self.community_cards[1],
-                self.community_cards[2],
-            ))
-        } else {
-            None
+        let flop = match self.community_cards.as_slice() {
+            &[c1, c2, c3, ..] => Some((c1, c2, c3)),
+            _ => None,
         };
 
         let turn = self.community_cards.get(3).copied();
@@ -889,9 +944,16 @@ impl GameState {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::doc_markdown,
+        clippy::type_complexity
+    )]
     use super::*;
-    use poker_core::poker::{Card, CardNumber, CardSuit};
-    use poker_core::protocol::ServerMessage;
+    use crate::poker::{Card, CardNumber, CardSuit};
+    use crate::protocol::ServerMessage;
 
     fn setup_game(
         players: Vec<(u32, &str, u32, PlayerStatus, Option<(Card, Card)>, u32)>,
@@ -1394,5 +1456,126 @@ mod tests {
         assert_eq!(gs.players.get(&2).unwrap().chips, 100);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
         assert_eq!(gs.pot, 0);
+    }
+
+    /// Count `BlindsIncreased` events in a message slice.
+    fn count_blind_increases(msgs: &[ServerMessage]) -> usize {
+        msgs.iter()
+            .filter(|m| matches!(m, ServerMessage::BlindsIncreased { .. }))
+            .count()
+    }
+
+    /// Latest big blind from a message slice (0 if none).
+    fn latest_big_blind(msgs: &[ServerMessage]) -> u32 {
+        msgs.iter()
+            .rev()
+            .find_map(|m| match m {
+                ServerMessage::BlindsIncreased { big_blind, .. } => Some(*big_blind),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// Blinds don't increase on a fresh `start_new_hand` (no anchor set yet —
+    /// the anchor is established on game start, not on construction).
+    #[test]
+    fn test_blinds_no_increase_without_anchor() {
+        let mut gs = GameState::new();
+        gs.blind_config = BlindConfig {
+            interval_secs: 1,
+            increase_percent: 50,
+        };
+        // last_blind_increase is None → no increase possible.
+        let msgs = gs.start_new_hand();
+        assert_eq!(count_blind_increases(&msgs), 0);
+    }
+
+    /// Blinds don't increase before the interval has elapsed.
+    #[test]
+    fn test_blinds_no_increase_within_interval() {
+        let mut gs = GameState::new();
+        gs.blind_config = BlindConfig {
+            interval_secs: 60,
+            increase_percent: 50,
+        };
+        gs.last_blind_increase = Some(Instant::now());
+        let msgs = gs.start_new_hand();
+        assert_eq!(count_blind_increases(&msgs), 0);
+    }
+
+    /// One interval elapsed → exactly one increase.
+    #[test]
+    fn test_blinds_single_increase_after_one_interval() {
+        let mut gs = GameState::new();
+        gs.blind_config = BlindConfig {
+            interval_secs: 1,
+            increase_percent: 50,
+        };
+        // Anchor 1s in the past so exactly one interval has elapsed.
+        gs.last_blind_increase = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .map(Some)
+            .unwrap();
+        let msgs = gs.start_new_hand();
+        assert_eq!(count_blind_increases(&msgs), 1);
+        // 20 + ceil(20*50/100) = 30.
+        assert_eq!(latest_big_blind(&msgs), 30);
+    }
+
+    /// A gap spanning three intervals must apply THREE increases (catch-up),
+    /// not one — the anchor advances by one interval per step rather than
+    /// resetting to `Instant::now()`.
+    #[test]
+    fn test_blinds_catch_up_multiple_missed_levels() {
+        let mut gs = GameState::new();
+        gs.blind_config = BlindConfig {
+            interval_secs: 1,
+            increase_percent: 100, // doubles each step for easy math
+        };
+        // Anchor 3s in the past: three intervals have elapsed.
+        gs.last_blind_increase = Instant::now()
+            .checked_sub(Duration::from_secs(3))
+            .map(Some)
+            .unwrap();
+        let msgs = gs.start_new_hand();
+        assert_eq!(
+            count_blind_increases(&msgs),
+            3,
+            "a 3-interval gap must catch up all three levels"
+        );
+        // 20 → 40 → 80 → 160.
+        assert_eq!(latest_big_blind(&msgs), 160);
+    }
+
+    /// After catch-up the anchor sits on the interval boundary (not "now"), so
+    /// one more interval steps exactly once more.
+    #[test]
+    fn test_blinds_anchor_advances_by_interval_not_now() {
+        let mut gs = GameState::new();
+        gs.blind_config = BlindConfig {
+            interval_secs: 1,
+            increase_percent: 100,
+        };
+        // Anchor 2s in the past.
+        gs.last_blind_increase = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .map(Some)
+            .unwrap();
+        // First hand: catches up two levels → 20 → 40 → 80. Anchor now at
+        // (original + 2s), i.e. ~now.
+        let _ = gs.start_new_hand();
+        assert_eq!(gs.big_blind, 80);
+
+        // Simulate one more interval passing before the next hand.
+        gs.last_blind_increase = gs
+            .last_blind_increase
+            .and_then(|t| t.checked_sub(Duration::from_secs(1)));
+        let msgs = gs.start_new_hand();
+        assert_eq!(
+            count_blind_increases(&msgs),
+            1,
+            "exactly one step after one more interval"
+        );
+        assert_eq!(latest_big_blind(&msgs), 160);
     }
 }

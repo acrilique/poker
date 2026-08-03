@@ -28,7 +28,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
+use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use poker_core::poker::{Hand, calculate_equity_multi};

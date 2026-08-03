@@ -4,7 +4,8 @@ members = [
     "crates/poker-core",
     "crates/poker-client",
     "crates/poker-tui",
-    "crates/poker-server",
+    "crates/poker-ws-server",
+    "crates/poker-sse-server",
     "crates/poker-ui",
     "crates/poker-web",
 ]

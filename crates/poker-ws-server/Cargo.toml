@@ -1,5 +1,5 @@
 [package]
-name = "poker-server"
+name = "poker-ws-server"
 version = "0.1.0"
 edition = "2024"
 description = "Multi-room Axum-based poker server with WebSocket support"

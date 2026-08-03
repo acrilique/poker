@@ -15,5 +15,6 @@
 // You should have received a copy of the GNU General Public License
 // along with poker. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod game_logic;
 pub mod poker;
 pub mod protocol;

@@ -1,0 +1,23 @@
+{% if !game_started %}
+<div id="controls" class="lobby-panel">
+  <div class="room-chip">Room: <span class="select-all">{{ room_id }}</span></div>
+  {% if host.is_host %}
+  <button class="btn btn-primary btn-block" data-on:click="@post('/poker/action/start')">Start Game</button>
+  {% else %}
+  <p class="waiting-text">Waiting for the host to start…</p>
+  {% endif %}
+  <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
+</div>
+{% else %}
+<div id="controls" class="controls-panel">
+  {% if host.is_host %}
+  <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="@post('/poker/action/toggle-late-entry')">
+    Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
+  </button>
+  {% endif %}
+  <button class="btn btn-block {% if sitting_out %}btn-primary{% else %}btn-elevated{% endif %}" data-on:click="{% if sitting_out %}@post('/poker/action/sitin'){% else %}@post('/poker/action/sitout'){% endif %}">
+    {% if sitting_out %}Sit In{% else %}Sit Out{% endif %}
+  </button>
+  <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
+</div>
+{% endif %}

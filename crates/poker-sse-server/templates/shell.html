@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1A130D">
+    <title>Poker — acrilique</title>
+    <link rel="stylesheet" href="/poker/static/poker.css">
+    <script src="/poker/static/poker.js"></script>
+    <script type="module" src="/poker/static/datastar.js"></script>
+  </head>
+  <body
+    data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', _toast: ''}"
+    data-on:datastar-fetch="pokerHandleFetch($sessiontoken, $roomid)"
+    data-init="$sessiontoken && @get('/poker/events', {openWhenHidden: true})"
+  >
+    <div id="toast" class="toast" role="status" aria-live="polite" data-show="$_toast" data-on:animationend="$_toast = ''">
+      <span data-text="$_toast"></span>
+    </div>
+    <div id="game-root">
+      <div id="connect" class="connect-screen">
+        <div class="conn-card">
+          <div class="conn-header">
+            <h1>Texas hold 'em</h1>
+            <p>by acrilique</p>
+          </div>
+          <div class="conn-fields">
+            <label class="field">
+              <span>Player name</span>
+              <input type="text" maxlength="16" placeholder="Enter your name" data-bind:name>
+            </label>
+            <label class="field">
+              <span>Room ID</span>
+              <input type="text" placeholder="room42" data-bind:roomid>
+              <small>Alphanumeric, up to 19 characters</small>
+            </label>
+            <details class="host-settings">
+              <summary>Host settings</summary>
+              <div class="host-inputs">
+                <label class="field">
+                  <span>Initial stack</span>
+                  <input type="number" min="1" data-bind:stackbbs>
+                  <small>BBs per player</small>
+                </label>
+                <label class="field">
+                  <span>Blind interval</span>
+                  <input type="number" min="0" placeholder="0" data-bind:blindmins>
+                  <small>Minutes</small>
+                </label>
+                <label class="field">
+                  <span>Blind rise</span>
+                  <input type="number" min="0" placeholder="0" data-bind:blindpct>
+                  <small>Percent</small>
+                </label>
+              </div>
+            </details>
+          </div>
+          <div class="conn-buttons">
+            <button class="btn btn-primary" data-on:click="@post('/poker/room/create'); pokerSaveName($name)">Create Room</button>
+            <button class="btn btn-muted" data-on:click="@post('/poker/room/join'); pokerSaveName($name)">Join Room</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
