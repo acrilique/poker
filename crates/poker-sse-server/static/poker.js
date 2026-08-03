@@ -51,6 +51,64 @@ function pokerExit() {
 }
 
 // ---------------------------------------------------------------------------
+// Live blinds-timer countdown
+// ---------------------------------------------------------------------------
+
+// The server bakes an absolute epoch-ms deadline into #blinds-timer on every
+// #table morph (data-blind-deadline). A single global interval ticks the text
+// down using deadline - Date.now(), so the #table fat-morph — which fires on
+// every action — can't restart the countdown: a re-baked identical deadline
+// just keeps ticking. Reconnects resume in sync automatically because the
+// deadline is absolute, not relative.
+let _blindsTimerStarted = false;
+
+function pokerBlindsTick() {
+  const el = document.getElementById("blinds-timer");
+  if (!el) return;
+  const text = document.getElementById("blinds-timer-text");
+  if (!text) return;
+  const raw = el.getAttribute("data-blind-deadline") || "";
+  if (!raw || el.getAttribute("data-blind-enabled") !== "true") {
+    text.textContent = "";
+    el.classList.remove("blinds-soon");
+    return;
+  }
+  // parseInt is fine here: the server emits a plain u128 decimal string.
+  const deadline = parseInt(raw, 10);
+  if (!Number.isFinite(deadline)) {
+    text.textContent = "";
+    return;
+  }
+  const remainingMs = Math.max(0, deadline - Date.now());
+  const totalSecs = Math.floor(remainingMs / 1000);
+  const m = Math.floor(totalSecs / 60);
+  const s = totalSecs % 60;
+  text.textContent = m + ":" + (s < 10 ? "0" + s : s);
+  // Warn state in the final 10 seconds.
+  if (totalSecs <= 10) {
+    el.classList.add("blinds-soon");
+  } else {
+    el.classList.remove("blinds-soon");
+  }
+}
+
+// Start the interval once per tab. Guarded so repeated inits (e.g. a reconnect
+// morph) can't stack intervals.
+function pokerBlindsTickStart() {
+  if (_blindsTimerStarted) return;
+  _blindsTimerStarted = true;
+  // 250ms is smooth for a seconds-precision display and cheap on idle.
+  setInterval(pokerBlindsTick, 250);
+  pokerBlindsTick();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", pokerBlindsTickStart);
+} else {
+  pokerBlindsTickStart();
+}
+
+// ---------------------------------------------------------------------------
 // datastar-fetch lifecycle: persist session
 // ---------------------------------------------------------------------------
 

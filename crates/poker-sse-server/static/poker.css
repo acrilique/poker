@@ -474,6 +474,55 @@ input[type="number"] {
   }
 }
 
+/* Live blinds-timer chip in the table header. The countdown text is driven by
+ * pokerBlindsTick (a 250ms interval) off an absolute deadline baked into
+ * data-blind-deadline — see poker.js. */
+.blinds-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  background: var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-muted) 50%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (min-width: 1024px) {
+  .blinds-timer {
+    padding: 0.25rem 0.75rem;
+  }
+}
+.blinds-level {
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.blinds-text {
+  min-width: 3.5em;
+  text-align: center;
+  color: color-mix(in srgb, var(--color-foreground) 70%, transparent);
+}
+.blinds-next {
+  font-size: 0.7rem;
+  color: color-mix(in srgb, var(--color-foreground) 45%, transparent);
+}
+/* Final-seconds warning state (toggled from JS). */
+.blinds-timer.blinds-soon {
+  border-color: var(--color-accent);
+  animation: blinds-pulse 1s ease-in-out infinite;
+}
+.blinds-timer.blinds-soon .blinds-text {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+@keyframes blinds-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+}
+
 .community-cards {
   display: flex;
   gap: 0.5rem;

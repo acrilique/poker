@@ -407,7 +407,7 @@ impl RoomManager {
 
         room.disconnected_at.remove(&player_id);
         let ctx = crate::handlers::ctx_of(&room, room_id);
-        let events = render::full_snapshot(ctx, player_id);
+        let events = render::full_snapshot(&ctx, player_id);
 
         if let Some(conn) = room.players.get_mut(&player_id) {
             conn.tx = Some(tx);

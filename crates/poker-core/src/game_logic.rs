@@ -884,7 +884,8 @@ impl GameState {
 
         let remaining: Vec<&Player> = self.players.values().filter(|p| p.chips > 0).collect();
 
-        if let Some(winner) = remaining.first() {
+        if remaining.len() == 1 {
+            let winner = remaining[0];
             messages.push(ServerMessage::GameOver {
                 winner_id: winner.id,
                 winner_name: winner.name.clone(),
@@ -908,6 +909,34 @@ impl GameState {
         let river = self.community_cards.get(4).copied();
 
         Board { flop, turn, river }
+    }
+
+    /// The next blind level, computed with the same `increase_percent` and
+    /// `div_ceil` rounding the [`Self::start_new_hand`] bump uses. Returns the
+    /// current level unchanged when rising blinds aren't configured.
+    pub fn next_blinds(&self) -> (u32, u32) {
+        let pct = self.blind_config.increase_percent;
+        let next = |cur: u32| cur.saturating_add(cur.saturating_mul(pct).div_ceil(100));
+        (next(self.small_blind), next(self.big_blind))
+    }
+
+    /// Seconds remaining until the next blind increase, anchored to
+    /// [`Self::last_blind_increase`] with the same `last + n*interval` semantics
+    /// the `start_new_hand` catch-up loop uses — so the countdown reaches 0 at
+    /// exactly the moment the next hand will step the level. `None` when rising
+    /// blinds aren't configured or the anchor hasn't been set yet (lobby).
+    pub fn seconds_to_next_blind(&self) -> Option<u64> {
+        if !self.blind_config.is_enabled() {
+            return None;
+        }
+        let last = self.last_blind_increase?;
+        let interval = self.blind_config.interval_secs;
+        // Elapsed since the anchor, modulo one interval: how far into the
+        // current level we are. The remainder is what's left of this level.
+        let elapsed_secs = last.elapsed().as_secs();
+        let into_level = elapsed_secs.rem_euclid(interval);
+        let remaining = interval.saturating_sub(into_level);
+        Some(remaining)
     }
 
     /// Get valid actions for current player.
@@ -1456,6 +1485,100 @@ mod tests {
         assert_eq!(gs.players.get(&2).unwrap().chips, 100);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
         assert_eq!(gs.pot, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 11: Multi-player hand must NOT end the game (regression)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resolve_hand_does_not_end_game_with_multiple_survivors() {
+        // Three players still hold chips. Resolving the pot is just "hand
+        // over", not "game over" — the engine must keep the session alive so
+        // the next hand can be dealt. Regression for the bug where
+        // `remaining.first()` being `Some` (true after any hand) was taken as
+        // the game-over signal, which tore the game down mid-match.
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    200,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (
+                    2,
+                    "Bob",
+                    100,
+                    PlayerStatus::Active,
+                    Some(low_hand()),
+                    100,
+                ),
+                (
+                    3,
+                    "Charlie",
+                    50,
+                    PlayerStatus::Folded,
+                    None,
+                    0,
+                ),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 200);
+        // Simulate an in-progress game so is_game_over's hand_number guard is met.
+        gs.game_started = true;
+        gs.hand_number = 5;
+
+        let msgs = gs.resolve_hand();
+
+        // Alice wins the pot; Bob and Charlie still hold chips → not game over.
+        assert!(
+            msgs.iter()
+                .all(|m| !matches!(m, ServerMessage::GameOver { .. })),
+            "GameOver must not fire while more than one player has chips"
+        );
+        assert!(gs.game_started, "game_started must stay true mid-game");
+        assert!(!gs.is_game_over());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 12: Game ends only when exactly one player has chips
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resolve_hand_ends_game_with_single_survivor() {
+        // Everyone except one player is at zero chips — genuine game over.
+        let mut gs = setup_game(
+            vec![
+                (
+                    1,
+                    "Alice",
+                    0,
+                    PlayerStatus::Active,
+                    Some(royal_flush_hand()),
+                    100,
+                ),
+                (2, "Bob", 0, PlayerStatus::Active, Some(low_hand()), 0),
+            ],
+            standard_board(),
+        );
+        assert_eq!(gs.pot, 100);
+        gs.game_started = true;
+        gs.hand_number = 5;
+
+        let msgs = gs.resolve_hand();
+
+        let winner = msgs
+            .iter()
+            .find_map(|m| match m {
+                ServerMessage::GameOver { winner_id, .. } => Some(*winner_id),
+                _ => None,
+            })
+            .expect("GameOver should fire when exactly one player has chips");
+        assert_eq!(winner, 1);
+        assert!(!gs.game_started, "game_started must be cleared on game over");
+        assert!(gs.is_game_over());
     }
 
     /// Count `BlindsIncreased` events in a message slice.

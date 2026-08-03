@@ -234,35 +234,35 @@ fn main() {
             name: "lobby (6 players)",
             events: {
                 let ctx = Ctx::new(&lobby, "ROOM42", 30);
-                render::state_events(ctx, viewer_of(&lobby))
+                render::state_events(&ctx, viewer_of(&lobby))
             },
         },
         Sample {
             name: "preflop (6 players)",
             events: {
                 let ctx = Ctx::new(&preflop, "ROOM42", 30);
-                render::state_events(ctx, viewer_of(&preflop))
+                render::state_events(&ctx, viewer_of(&preflop))
             },
         },
         Sample {
             name: "flop (6 players)",
             events: {
                 let ctx = Ctx::new(&flop, "ROOM42", 30);
-                render::state_events(ctx, viewer_of(&flop))
+                render::state_events(&ctx, viewer_of(&flop))
             },
         },
         Sample {
             name: "river+pot (4 players)",
             events: {
                 let ctx = Ctx::new(&river, "ROOM42", 30);
-                render::state_events(ctx, viewer_of(&river))
+                render::state_events(&ctx, viewer_of(&river))
             },
         },
         Sample {
             name: "all-in showdown (3)",
             events: {
                 let ctx = Ctx::new(&show, "ROOM42", 30);
-                render::state_events(ctx, viewer_of(&show))
+                render::state_events(&ctx, viewer_of(&show))
             },
         },
     ];

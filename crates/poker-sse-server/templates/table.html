@@ -1,6 +1,19 @@
 <div id="table" class="table">
   <div class="table-meta">
     <div class="room-chip" title="Room ID — click to select">Room: <span class="select-all">{{ room_id }}</span></div>
+    {% if let Some(t) = blinds_timer %}
+    <div id="blinds-timer"
+         class="blinds-timer"
+         title="Current blind level{% if t.enabled %} — next rise countdown{% endif %}"
+         data-blind-deadline="{{ t.deadline_ms }}"
+         data-blind-enabled="{{ t.enabled }}">
+      <span class="blinds-level">{{ t.small_blind }}/{{ t.big_blind }}</span>
+      {% if t.enabled %}
+      <span class="blinds-text" id="blinds-timer-text">–:––</span>
+      <span class="blinds-next" title="Next level">→ {{ t.next_small_blind }}/{{ t.next_big_blind }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
     <div class="hand-meta">Hand #{{ hand_number }} · {{ stage }}</div>
   </div>
   <div class="community-cards">

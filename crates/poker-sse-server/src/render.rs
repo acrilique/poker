@@ -107,6 +107,24 @@ pub struct PlayerListTpl {
     pub players: Vec<PlayerEntry>,
 }
 
+/// Live blinds-timer view baked into the table header on each morph. The
+/// countdown itself ticks client-side off `deadline_ms` (an absolute epoch
+/// timestamp), so the `#table` fat-morph can't restart it — see
+/// `pokerBlindsTick` in `static/poker.js`. `None`-valued fields mean "static
+/// blinds / not yet anchored"; the template renders a static-level chip then.
+#[derive(Clone)]
+pub struct BlindsTimerView {
+    pub small_blind: u32,
+    pub big_blind: u32,
+    pub next_small_blind: u32,
+    pub next_big_blind: u32,
+    /// Absolute deadline (epoch ms) for the next rise. Empty string when blinds
+    /// are static or the anchor isn't set yet (lobby / pre-start).
+    pub deadline_ms: String,
+    /// True when rising blinds are configured and the anchor is set.
+    pub enabled: bool,
+}
+
 #[derive(Template)]
 #[template(path = "table.html")]
 pub struct TableTpl {
@@ -116,6 +134,7 @@ pub struct TableTpl {
     pub community: Vec<Option<CardView>>,
     pub pot: String,
     pub showdown: Vec<ShowdownHand>,
+    pub blinds_timer: Option<BlindsTimerView>,
 }
 
 #[derive(Template)]
@@ -236,7 +255,6 @@ fn render_or_log<T: Template>(tpl: T, region: &'static str) -> String {
 
 
 /// Render context: game state plus per-room metadata the templates need.
-#[derive(Clone, Copy)]
 pub struct Ctx<'a> {
     pub gs: &'a GameState,
     pub room_id: &'a str,
@@ -244,21 +262,60 @@ pub struct Ctx<'a> {
     /// `--timer-duration` on the active player's row, so a reconnecting client
     /// resumes in sync instead of restarting.
     pub turn_remaining: u32,
+    /// Live blinds-timer view for the table header. `None` when rising blinds
+    /// aren't configured or the game hasn't started.
+    pub blinds_timer: Option<BlindsTimerView>,
 }
 
 impl<'a> Ctx<'a> {
-    pub const fn new(gs: &'a GameState, room_id: &'a str, turn_remaining: u32) -> Self {
+    pub fn new(gs: &'a GameState, room_id: &'a str, turn_remaining: u32) -> Self {
         Self {
             gs,
             room_id,
             turn_remaining,
+            blinds_timer: build_blinds_timer(gs),
         }
     }
 }
 
+/// Derive the blinds-timer view from settled `GameState`. Returns `None` in the
+/// lobby (no chip before the game starts). The deadline is an absolute epoch-ms
+/// string the client ticks against; `enabled` is false for static-blinds rooms,
+/// in which case the template renders the level with no countdown.
+fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
+    // No chip in the lobby: the timer is a live-game feature.
+    if !gs.game_started {
+        return None;
+    }
+    let (next_small, next_big) = gs.next_blinds();
+    let remaining = gs.seconds_to_next_blind();
+    let enabled = remaining.is_some();
+    // An absolute deadline keeps reconnects and morphs in sync: the client
+    // computes `deadline - Date.now()` each tick, so a re-baked deadline (same
+    // value) never restarts the countdown.
+    let deadline_ms = remaining.map_or_else(String::new, |secs| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let ms = u128::from(secs)
+            .saturating_mul(1000)
+            .saturating_add(now);
+        ms.to_string()
+    });
+    Some(BlindsTimerView {
+        small_blind: gs.small_blind,
+        big_blind: gs.big_blind,
+        next_small_blind: next_small,
+        next_big_blind: next_big,
+        deadline_ms,
+        enabled,
+    })
+}
+
 /// Build the per-viewer player rows shared by `player_list_events` and
 /// `render_player_list`. Split out so the two public renderers stay in sync.
-fn build_player_entries(ctx: Ctx, viewer: u32) -> Vec<PlayerEntry> {
+fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
     let gs = ctx.gs;
     let turn_pid = if gs.game_started && !matches!(gs.phase, GamePhase::Lobby | GamePhase::Showdown)
     {
@@ -352,7 +409,7 @@ fn seat_at(gs: &GameState, base: usize, offset: usize, seats: usize) -> Option<u
     gs.player_order.get(idx).copied()
 }
 
-fn render_player_list(ctx: Ctx, viewer: u32) -> String {
+fn render_player_list(ctx: &Ctx, viewer: u32) -> String {
     render_or_log(
         PlayerListTpl {
             players: build_player_entries(ctx, viewer),
@@ -361,7 +418,7 @@ fn render_player_list(ctx: Ctx, viewer: u32) -> String {
     )
 }
 
-fn render_table(ctx: Ctx, viewer: u32) -> String {
+fn render_table(ctx: &Ctx, viewer: u32) -> String {
     // At showdown, reveal every non-folded player's hole cards and rank from
     // the settled state.
     let showdown = if matches!(ctx.gs.phase, GamePhase::Showdown) {
@@ -375,7 +432,7 @@ fn render_table(ctx: Ctx, viewer: u32) -> String {
 /// Build the `#table` HTML from a render context and a precomputed showdown
 /// overlay. Shared by [`render_table`] and [`equity_table_events`] so the
 /// community-card / stage / pot logic lives in one place.
-fn table_html(ctx: Ctx, showdown: Vec<ShowdownHand>) -> String {
+fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
     let gs = ctx.gs;
     let mut community: Vec<Option<CardView>> = gs
         .community_cards
@@ -404,6 +461,7 @@ fn table_html(ctx: Ctx, showdown: Vec<ShowdownHand>) -> String {
         community,
         pot: gs.pot.to_string(),
         showdown,
+        blinds_timer: ctx.blinds_timer.clone(),
     }
     .render()
     .unwrap_or_else(|e| {
@@ -583,7 +641,7 @@ fn inert_action_bar(sitting_out: bool) -> String {
     )
 }
 
-fn render_controls(ctx: Ctx, viewer: u32) -> String {
+fn render_controls(ctx: &Ctx, viewer: u32) -> String {
     let gs = ctx.gs;
     let sitting_out = gs.players.get(&viewer).is_some_and(|p| p.sitting_out);
     render_or_log(
@@ -654,7 +712,7 @@ pub fn attach_events_stream_trigger() -> Vec<DatastarEvent> {
 /// `broadcast_allin_showdown`; everywhere else the showdown overlay is derived
 /// from state in `render_table`.
 pub fn equity_table_events(
-    ctx: Ctx,
+    ctx: &Ctx,
     viewer: u32,
     hands_with_equity: &[(u32, [CardInfo; 2], f64)],
 ) -> DatastarEvent {
@@ -682,7 +740,7 @@ pub fn equity_table_events(
 /// Render the live state regions for one viewer as a fat-morph of `#game-root`
 /// (player list, table, hole cards, action bar, controls). A pure function of
 /// `(GameState, viewer)` — order-independent and idempotent.
-pub fn state_events(ctx: Ctx, viewer: u32) -> Vec<DatastarEvent> {
+pub fn state_events(ctx: &Ctx, viewer: u32) -> Vec<DatastarEvent> {
     let player_list = render_player_list(ctx, viewer);
     let table = render_table(ctx, viewer);
     let hole_cards = render_hole_cards(ctx.gs, viewer);
@@ -711,7 +769,7 @@ pub fn state_events(ctx: Ctx, viewer: u32) -> Vec<DatastarEvent> {
 
 /// Full state render for the initial join / reconnect. Alias for
 /// [`state_events`], kept under this name so the join flow reads naturally.
-pub fn full_snapshot(ctx: Ctx, viewer: u32) -> Vec<DatastarEvent> {
+pub fn full_snapshot(ctx: &Ctx, viewer: u32) -> Vec<DatastarEvent> {
     state_events(ctx, viewer)
 }
 

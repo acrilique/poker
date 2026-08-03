@@ -559,7 +559,7 @@ async fn render_full_snapshot(
 ) -> Vec<datastar::DatastarEvent> {
     let room = room_arc.lock().await;
     let ctx = ctx_of(&room, room_id);
-    render::full_snapshot(ctx, pid)
+    render::full_snapshot(&ctx, pid)
 }
 
 pub fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
@@ -580,7 +580,7 @@ pub fn broadcast_state(room: &mut Room, room_id: &str) {
         let ctx = ctx_of(room, room_id);
         room.players
             .keys()
-            .map(|&viewer| (viewer, render::state_events(ctx, viewer)))
+            .map(|&viewer| (viewer, render::state_events(&ctx, viewer)))
             .collect()
     };
     let mut fan = Fanout::new(room);
@@ -1257,7 +1257,7 @@ async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
         room.players
             .keys()
             .map(|&viewer| {
-                let events = vec![render::equity_table_events(ctx, viewer, &hands_with_equity)];
+                let events = vec![render::equity_table_events(&ctx, viewer, &hands_with_equity)];
                 (viewer, events)
             })
             .collect()
