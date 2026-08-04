@@ -635,7 +635,20 @@ pub async fn action_update_settings(
     // `starting_bbs` is frozen into `starting_chips` at game start, so only
     // apply it pre-game.
     if !room.game_state.game_started {
-        room.game_state.starting_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
+        let new_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
+        room.game_state.starting_bbs = new_bbs;
+        // Chips are frozen into each player at join time
+        // (`add_player_with_chips`), so `starting_bbs` alone doesn't reach
+        // already-seated players. Pre-game no chips have been won or lost, so
+        // every player is still at the now-stale buy-in — rebuy them at the
+        // new amount so existing players match those who join afterwards.
+        // `big_blind` is the right multiplier here: `starting_big_blind` is
+        // only frozen at game start, so it's still 0 pre-game (matching the
+        // `bb` selection in `add_player_with_chips`).
+        let new_stack = new_bbs.saturating_mul(room.game_state.big_blind);
+        for player in room.game_state.players.values_mut() {
+            player.chips = new_stack;
+        }
     }
 
     // Re-anchor the schedule so the catch-up loop in start_new_hand doesn't

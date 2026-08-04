@@ -243,11 +243,74 @@ fn apply_settings(
     room.game_state.blind_config = new_config;
     room.blind_config = new_config;
     if !room.game_state.game_started {
-        room.game_state.starting_bbs = stack_bbs.max(1);
+        let new_bbs = stack_bbs.max(1);
+        room.game_state.starting_bbs = new_bbs;
+        // Existing players' chips were frozen at their (now-stale) join-time
+        // buy-in, so rebuy them at the new amount. See `action_update_settings`.
+        let new_stack = new_bbs.saturating_mul(room.game_state.big_blind);
+        for player in room.game_state.players.values_mut() {
+            player.chips = new_stack;
+        }
     }
     if game_started && new_config.is_enabled() {
         room.game_state.last_blind_increase = Some(std::time::Instant::now());
     }
+}
+
+/// Pre-game, raising the starting stack must rebuy already-seated players to
+/// match what a newly joining player would receive. This is the regression
+/// where `starting_bbs` was updated but existing players' chips were left at
+/// the stale join-time buy-in.
+#[tokio::test]
+async fn update_settings_pre_game_rebuys_existing_players() {
+    let state = app_state();
+    // `room_with_players` uses `create_room(.., 100)` BBs. With the default
+    // 20 big blind that's 2000 chips per seated player.
+    let players = room_with_players(&state, "set3", &["host", "p2", "p3"]).await;
+    let host_id = players[0].0;
+
+    let room_arc = state.room_manager.get_room("set3").await.unwrap();
+    {
+        let room = room_arc.lock().await;
+        let expected = room.game_state.starting_bbs * room.game_state.big_blind;
+        assert_eq!(expected, 2_000);
+        for pid in [players[0].0, players[1].0, players[2].0] {
+            assert_eq!(
+                room.game_state.players.get(&pid).unwrap().chips,
+                expected,
+                "players should start at the original buy-in"
+            );
+        }
+    }
+
+    // Host raises the stack to 300 BBs (pre-game).
+    {
+        let mut room = room_arc.lock().await;
+        apply_settings(&mut room, host_id, 5, 50, 300, false);
+    }
+
+    let expected_new = 300 * 20;
+    {
+        let room = room_arc.lock().await;
+        assert_eq!(room.game_state.starting_bbs, 300);
+        for pid in [players[0].0, players[1].0, players[2].0] {
+            assert_eq!(
+                room.game_state.players.get(&pid).unwrap().chips,
+                expected_new,
+                "existing players must be rebought at the new stack"
+            );
+        }
+    }
+
+    // A player joining after the change lands on the same stack, proving the
+    // existing players now match new joiners.
+    let (new_pid, _token, _) = state.room_manager.join_room("set3", "late").await.unwrap();
+    let room = room_arc.lock().await;
+    assert_eq!(
+        room.game_state.players.get(&new_pid).unwrap().chips,
+        expected_new,
+        "a new joiner should match the rebought existing players"
+    );
 }
 
 #[tokio::test]
