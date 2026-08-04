@@ -10,9 +10,11 @@
     {% if p.status == SeatStatus::Folded %}<span class="player-tag">(folded)</span>{% endif %}
     {% if p.status == SeatStatus::Out %}<span class="player-tag">(out)</span>{% endif %}
   </div>
-  <div class="player-right">
-    <span class="player-stack">{{ p.stack }}</span>
-    {% if let Some(b) = p.bet %}<span class="player-bet">{{ b }}</span>{% endif %}
+  <div class="player-right"
+       title="Click to toggle chips / BB"
+       data-on:click="$_mode = ($_mode === 'bb' ? 'chips' : 'bb'); pokerSaveMode($_mode)">
+    <span class="player-stack" data-text="pokerFmt({{ p.stack }}, $bb, $_mode)">{{ p.stack }}</span>
+    {% if let Some(b) = p.bet %}<span class="player-bet" data-text="'+' + pokerFmt({{ b }}, $bb, $_mode)">+{{ b }}</span>{% endif %}
   </div>
 </div>
 {% endfor %}

@@ -25,7 +25,10 @@
       {% endif %}
     {% endfor %}
   </div>
-  <div class="pot" title="Pot">Pot: {{ pot }}</div>
+  <div class="pot" title="Pot — click to toggle chips / BB"
+       data-on:click="$_mode = ($_mode === 'bb' ? 'chips' : 'bb'); pokerSaveMode($_mode)">
+    Pot: <span data-text="pokerFmt({{ pot }}, $bb, $_mode)">{{ pot }}</span>
+  </div>
   {% if !showdown.is_empty() %}
   <div class="showdown">
     {% for h in showdown %}

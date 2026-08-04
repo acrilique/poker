@@ -357,6 +357,7 @@ input[type="number"] {
   display: flex;
   align-items: center;
   gap: 0.375rem;
+  cursor: pointer;
 }
 .player-stack {
   font-size: 0.875rem;
@@ -542,6 +543,7 @@ input[type="number"] {
   color: var(--color-accent);
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
   user-select: none;
+  cursor: pointer;
 }
 @media (min-width: 1024px) {
   .pot {
@@ -759,6 +761,12 @@ input[type="number"] {
 }
 .raise-input:focus {
   box-shadow: 0 0 0 2px var(--color-accent);
+}
+.raise-unit {
+  font-size: 0.75rem;
+  color: color-mix(in srgb, var(--color-foreground) 50%, transparent);
+  user-select: none;
+  white-space: nowrap;
 }
 .min-raise {
   font-size: 0.75rem;

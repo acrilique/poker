@@ -73,8 +73,13 @@ pub enum SeatStatus {
 
 pub struct PlayerEntry {
     pub name: String,
-    pub stack: String,
-    pub bet: Option<String>,
+    /// Raw chip count. The client formats it (chips / big blinds) from a
+    /// local `$_mode` signal — see `pokerFmt` in `static/poker.js`. Keeping
+    /// the raw number here (instead of a pre-formatted string) means a player
+    /// toggling their own display mode never needs a server round-trip or a
+    /// broadcast to other players.
+    pub stack: u32,
+    pub bet: Option<u32>,
     pub is_us: bool,
     pub blind: Blind,
     pub status: SeatStatus,
@@ -132,7 +137,8 @@ pub struct TableTpl {
     pub hand_number: u32,
     pub stage: String,
     pub community: Vec<Option<CardView>>,
-    pub pot: String,
+    /// Raw pot in chips — the client formats it from `$_mode`.
+    pub pot: u32,
     pub showdown: Vec<ShowdownHand>,
     pub blinds_timer: Option<BlindsTimerView>,
 }
@@ -159,9 +165,18 @@ pub struct ActionBarTpl {
     pub active: bool,
     pub sitting_out: bool,
     pub valid: ValidActions,
-    pub call_label: String,
+    /// Raw call amount in chips. The client formats it from `$_mode` so the
+    /// label matches the rest of the table.
+    pub call_amount: u32,
+    /// Raw preset raise amounts in chips. The client converts each to display
+    /// units when injecting it into the raise input.
     pub presets: Vec<Preset>,
-    pub min_raise_label: String,
+    /// Raw minimum raise in chips. Empty when there's no raise floor.
+    pub min_raise: u32,
+    /// Unit label shown beside the raise input ("BB" once blinds are up,
+    /// "chips" in the lobby). The input itself is unit-aware: the player types
+    /// in this unit and `poker.js` converts to chips before the raise POST.
+    pub raise_unit: &'static str,
 }
 
 /// Host-only controls shown in the controls panel. Groups `is_host` and
@@ -346,15 +361,11 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
             };
             let (stack, bet_text) = if in_hand {
                 (
-                    p.chips.saturating_sub(bet).to_string(),
-                    if bet > 0 {
-                        Some(format!("+{bet}"))
-                    } else {
-                        None
-                    },
+                    p.chips.saturating_sub(bet),
+                    if bet > 0 { Some(bet) } else { None },
                 )
             } else {
-                (p.chips.to_string(), None)
+                (p.chips, None)
             };
             let blinds_up = in_hand && gs.player_order.len() >= 2;
             let blind = if blinds_up {
@@ -472,7 +483,7 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
         hand_number: gs.hand_number,
         stage,
         community,
-        pot: gs.pot.to_string(),
+        pot: gs.pot,
         showdown,
         blinds_timer: ctx.blinds_timer.clone(),
     }
@@ -573,7 +584,7 @@ fn render_action_bar(gs: &GameState, viewer: u32) -> String {
     let can_raise = valid.contains(&PlayerAction::Raise);
     let can_allin = valid.contains(&PlayerAction::AllIn);
 
-    let call_label = format!("Call {to_call}");
+    let call_amount = to_call;
 
     let max_raise = player.chips.saturating_sub(to_call);
     let pct_amount = |pct: u32| -> u32 {
@@ -615,10 +626,10 @@ fn render_action_bar(gs: &GameState, viewer: u32) -> String {
         Vec::new()
     };
 
-    let min_raise_label = if gs.min_raise > 0 && can_raise {
-        format!("Min {}", gs.min_raise)
+    let min_raise = if gs.min_raise > 0 && can_raise {
+        gs.min_raise
     } else {
-        String::new()
+        0
     };
 
     render_or_log(
@@ -630,9 +641,10 @@ fn render_action_bar(gs: &GameState, viewer: u32) -> String {
                 call: can_call,
                 raise: can_raise,
             },
-            call_label,
+            call_amount,
             presets,
-            min_raise_label,
+            min_raise,
+            raise_unit: if gs.big_blind > 0 { "BB" } else { "chips" },
         },
         "action_bar",
     )
@@ -646,9 +658,10 @@ fn inert_action_bar(sitting_out: bool) -> String {
             active: false,
             sitting_out,
             valid: ValidActions::default(),
-            call_label: String::new(),
+            call_amount: 0,
             presets: Vec::new(),
-            min_raise_label: String::new(),
+            min_raise: 0,
+            raise_unit: "chips",
         },
         "action_bar",
     )
@@ -776,11 +789,20 @@ pub fn state_events(ctx: &Ctx, viewer: u32) -> Vec<DatastarEvent> {
         "game",
     );
 
-    let events = vec![morph(game_html)];
+    let events = vec![
+        morph(game_html),
+        // Push the current big blind as a signal so the client can format
+        // chip amounts into big blinds from a local `$_mode` toggle. This is
+        // the Datastar-idiomatic way to drive frontend state from the backend
+        // (see "Patch Signals" in the Datastar docs): the raw number is the
+        // only display-mode-dependent input, so a player toggling their own
+        // view needs no further server traffic.
+        patch_signals(&serde_json::json!({ "bb": ctx.gs.big_blind })),
+    ];
 
-    // No signals to patch: the countdown ring is driven entirely by the
-    // `--timer-duration` CSS custom property on the active player's row above,
-    // which the morph reapplies.
+    // The countdown ring is driven entirely by the `--timer-duration` CSS
+    // custom property on the active player's row above, which the morph
+    // reapplies.
 
     events
 }

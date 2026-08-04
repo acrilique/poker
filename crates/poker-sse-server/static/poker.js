@@ -116,6 +116,68 @@ if (document.readyState === "loading") {
 }
 
 // ---------------------------------------------------------------------------
+// Chips / big-blinds display formatting
+// ---------------------------------------------------------------------------
+
+// The server bakes raw chip counts into the morphed HTML and pushes the current
+// big blind as a `$bb` signal on every state morph. A local `$_mode` signal
+// ('bb' | 'chips') — underscore-prefixed so it never reaches the backend —
+// drives all formatting client-side. Toggling it is therefore instant and
+// involves no server round-trip, so a player switching their own view can never
+// broadcast to others. This mirrors poker-ui's `StackDisplayMode`.
+
+const POKER_MODE_KEY = "poker.displayMode";
+
+function pokerLoadMode() {
+  return localStorage.getItem(POKER_MODE_KEY) || "bb";
+}
+
+function pokerSaveMode(mode) {
+  if (mode) localStorage.setItem(POKER_MODE_KEY, mode);
+}
+
+// Format a raw chip count for display: 'bb' mode shows big-blind multiples
+// ("12.5 BB" / "12 BB"), 'chips' shows the raw number. Falls back to chips
+// when the big blind isn't known yet (bb == 0, lobby / pre-start) to avoid
+// div-by-zero. Ported from poker-ui's `format_stack`. `bb` is passed from the
+// `$bb` signal the server patches on every morph.
+function pokerFmt(chips, bb, mode) {
+  if (chips == null || chips === "") return "";
+  const n = Number(chips);
+  if (!Number.isFinite(n)) return String(chips);
+  const b = Number(bb) || 0;
+  if (mode !== "bb" || !b) return String(n);
+  const v = n / b;
+  return Number.isInteger(v) ? v + " BB" : v.toFixed(1) + " BB";
+}
+
+// Convert a raise amount typed in display units into raw chips for the server.
+// In 'bb' mode the player types big blinds (e.g. 2.5 → 2.5 BB worth of chips);
+// in 'chips' mode the value passes through unchanged. Returns a string because
+// the raise input is string-valued.
+function pokerToChips(input, bb, mode) {
+  if (input == null || input === "") return "";
+  const n = Number(input);
+  if (!Number.isFinite(n)) return "";
+  if (mode === "bb" && bb) return String(Math.round(n * Number(bb)));
+  return String(n);
+}
+
+// Inverse of pokerToChips: convert a raw chip amount (a preset button's value)
+// into the display unit so the raise input shows the right number. In 'bb'
+// mode a 250-chip preset at 50/BB shows "5".
+function pokerToDisplay(chips, bb, mode) {
+  if (chips == null || chips === "") return "";
+  const n = Number(chips);
+  if (!Number.isFinite(n)) return "";
+  if (mode === "bb" && bb) {
+    const v = n / Number(bb);
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  }
+  return String(n);
+}
+
+// ---------------------------------------------------------------------------
 // datastar-fetch lifecycle: persist session
 // ---------------------------------------------------------------------------
 
@@ -147,3 +209,8 @@ window.pokerSaveName = pokerSaveName;
 window.pokerClearSession = pokerClearSession;
 window.pokerExit = pokerExit;
 window.pokerHandleFetch = pokerHandleFetch;
+window.pokerLoadMode = pokerLoadMode;
+window.pokerSaveMode = pokerSaveMode;
+window.pokerFmt = pokerFmt;
+window.pokerToChips = pokerToChips;
+window.pokerToDisplay = pokerToDisplay;

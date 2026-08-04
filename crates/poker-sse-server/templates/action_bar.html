@@ -3,7 +3,7 @@
   <div class="preset-row">
     {% for p in presets %}
     <button class="btn {% if p.is_allin %}btn-muted{% else %}btn-elevated{% endif %} btn-sm"
-            data-on:click="{% if p.is_allin %}@post('/poker/action/allin'){% else %}$raiseamt = {{ p.amount }}{% endif %}">{{ p.label }}</button>
+            data-on:click="{% if p.is_allin %}@post('/poker/action/allin'){% else %}$_raiseInput = pokerToDisplay({{ p.amount }}, $bb, $_mode){% endif %}">{{ p.label }}</button>
     {% endfor %}
   </div>
   <div class="action-row">
@@ -13,13 +13,15 @@
     <button class="btn btn-elevated" data-on:click="@post('/poker/action/fold')">Fold</button>
     {% endif %}
     {% if valid.call %}
-    <button class="btn btn-primary" data-on:click="@post('/poker/action/call')">{{ call_label }}</button>
+    <button class="btn btn-primary" data-on:click="@post('/poker/action/call')">Call <span data-text="pokerFmt({{ call_amount }}, $bb, $_mode)">{{ call_amount }}</span></button>
     {% endif %}
     {% if valid.raise %}
-    <div class="raise-group">
-      <input type="number" class="raise-input" placeholder="Amount" data-bind:raiseamt>
+    <div class="raise-group"
+         data-effect="$raiseamt = pokerToChips($_raiseInput, $bb, $_mode)">
+      <input type="number" class="raise-input" placeholder="Amount" data-bind:_raiseInput>
+      <span class="raise-unit">{{ raise_unit }}</span>
       <button class="btn btn-accent" data-on:click="@post('/poker/action/raise')">Raise</button>
-      {% if !min_raise_label.is_empty() %}<span class="min-raise">{{ min_raise_label }}</span>{% endif %}
+      {% if min_raise > 0 %}<span class="min-raise">Min <span data-text="pokerFmt({{ min_raise }}, $bb, $_mode)">{{ min_raise }}</span></span>{% endif %}
     </div>
     {% endif %}
   </div>

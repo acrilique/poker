@@ -18,7 +18,7 @@
     </script>
   </head>
   <body
-    data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', _toast: ''}"
+    data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', bb: 0, _toast: '', _mode: pokerLoadMode() || 'bb', _raiseInput: ''}"
     data-on:datastar-fetch="pokerHandleFetch($sessiontoken, $roomid)"
     data-init="$sessiontoken && @get('/poker/events', {openWhenHidden: true})"
   >
