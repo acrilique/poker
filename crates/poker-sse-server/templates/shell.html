@@ -5,9 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#1A130D">
     <title>Poker — acrilique</title>
+    <link rel="manifest" href="/poker/manifest.json">
+    <link rel="icon" href="/poker/static/favicon.ico">
+    <link rel="apple-touch-icon" href="/poker/static/icon-192.png">
     <link rel="stylesheet" href="/poker/static/poker.css">
     <script src="/poker/static/poker.js"></script>
     <script type="module" src="/poker/static/datastar.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/poker/sw.js", { scope: "/poker/" });
+      }
+    </script>
   </head>
   <body
     data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', _toast: ''}"

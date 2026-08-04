@@ -28,6 +28,7 @@ use std::task::{Context, Poll};
 
 use askama::Template;
 use axum::extract::State;
+use axum::http::header;
 use axum::response::{Html, IntoResponse, Sse};
 use datastar::axum::ReadSignals;
 use futures_util::{Stream, StreamExt};
@@ -93,6 +94,31 @@ struct ShellTpl;
 #[allow(clippy::unused_async)]
 pub async fn shell() -> Html<String> {
     Html(ShellTpl.render().unwrap_or_default())
+}
+
+/// `GET /poker/manifest.json` — the PWA web app manifest. Served at the app
+/// root rather than under `/poker/static/` so its `scope: "/poker/"` is
+/// honored by the browser. Embedded at compile time; no runtime file IO.
+#[allow(clippy::unused_async)]
+pub async fn manifest() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/manifest+json")],
+        include_str!("../static/manifest.json"),
+    )
+}
+
+/// `GET /poker/sw.js` — the service worker. Served at the app root so its
+/// registration scope can be `/poker/` (a worker under `/poker/static/` would
+/// be capped to that sub-path and could not control the shell). Embedded at
+/// compile time; compressed by the router's `CompressionLayer`.
+#[allow(clippy::unused_async)]
+pub async fn service_worker() -> impl IntoResponse {
+    const SW: &str = include_str!("../static/sw.js");
+    let stamped = SW.replace(
+        "__POKER_CACHE_VERSION__",
+        env!("POKER_CACHE_VERSION"),
+    );
+    ([(header::CONTENT_TYPE, "application/javascript")], stamped)
 }
 
 // ---------------------------------------------------------------------------

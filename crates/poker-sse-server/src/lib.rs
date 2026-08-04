@@ -130,6 +130,9 @@ pub fn build_router(config: &ServerConfig) -> Router {
 
     Router::new()
         .route("/poker", get(handlers::shell))
+        .route("/poker/", get(handlers::shell))
+        .route("/poker/manifest.json", get(handlers::manifest))
+        .route("/poker/sw.js", get(handlers::service_worker))
         .route("/poker/api/rooms", get(rooms_handler))
         .nest_service("/poker/static", ServeDir::new(&config.static_dir))
         .route("/poker/events", get(handlers::events))
