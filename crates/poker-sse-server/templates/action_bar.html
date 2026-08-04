@@ -18,7 +18,7 @@
     {% if valid.raise %}
     <div class="raise-group"
          data-effect="$raiseamt = pokerToChips($_raiseInput, $bb, $_mode)">
-      <input type="number" class="raise-input" placeholder="Amount" data-bind:_raiseInput>
+      <input type="number" class="raise-input" placeholder="Amount" data-bind:_raise-input>
       <span class="raise-unit">{{ raise_unit }}</span>
       <button class="btn btn-accent" data-on:click="@post('/poker/action/raise')">Raise</button>
       {% if min_raise > 0 %}<span class="min-raise">Min <span data-text="pokerFmt({{ min_raise }}, $bb, $_mode)">{{ min_raise }}</span></span>{% endif %}
