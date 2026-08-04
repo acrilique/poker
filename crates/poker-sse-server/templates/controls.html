@@ -32,9 +32,6 @@
 {% else %}
 <div id="controls" class="controls-panel">
   {% if host.is_host %}
-  <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="@post('/poker/action/toggle-late-entry')">
-    Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
-  </button>
   <details class="host-settings">
     <summary>Edit settings</summary>
     <div class="host-inputs">
@@ -48,6 +45,9 @@
         <input type="number" min="0" value="{{ settings.blind_pct }}" data-bind:blindpct>
         <small>Percent</small>
       </label>
+      <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="@post('/poker/action/toggle-late-entry')">
+        Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
+      </button>
       <button class="btn btn-elevated btn-block" data-on:click="@post('/poker/action/update-settings')">Save settings</button>
     </div>
   </details>
