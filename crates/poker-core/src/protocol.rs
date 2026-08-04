@@ -350,10 +350,7 @@ pub enum ClientMessage {
     /// Go all-in
     AllIn,
 
-    /// Request to sit out (auto-fold/check each turn).
-    SitOut,
-
-    /// Request to sit back in.
+    /// Request to sit back in after being auto-seated out (timeout/disconnect).
     SitIn,
 
     /// Toggle late entry (host only).

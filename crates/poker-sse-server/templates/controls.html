@@ -52,9 +52,9 @@
     </div>
   </details>
   {% endif %}
-  <button class="btn btn-block {% if sitting_out %}btn-primary{% else %}btn-elevated{% endif %}" data-on:click="{% if sitting_out %}@post('/poker/action/sitin'){% else %}@post('/poker/action/sitout'){% endif %}">
-    {% if sitting_out %}Sit In{% else %}Sit Out{% endif %}
-  </button>
+  {% if sitting_out %}
+  <button class="btn btn-primary btn-block" data-on:click="@post('/poker/action/sitin')">Sit In</button>
+  {% endif %}
   <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
 </div>
 {% endif %}

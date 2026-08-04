@@ -104,7 +104,7 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                 }
             }
 
-            // Bottom controls: Start / Sit Out / Late Entry / Exit
+            // Bottom controls: Start / Sit In / Late Entry / Exit
             div { class: "p-3 border-t border-muted/50 flex flex-col gap-2",
                 // Start game button (lobby only)
                 if !gs.game_started {
@@ -138,28 +138,14 @@ pub fn PlayerList(state: Signal<ClientGameState>) -> Element {
                     }
                 }
 
-                // Sit Out / Sit In toggle (visible once game has started)
-                if gs.game_started {
-                    {
-                        let is_sitting_out = gs.is_sitting_out();
-                        let (label, btn_class) = if is_sitting_out {
-                            ("Sit In", "w-full bg-primary hover:bg-primary-light rounded-lg py-1.5 text-sm font-semibold text-foreground transition")
-                        } else {
-                            ("Sit Out", "w-full bg-elevated hover:bg-base rounded-lg py-1.5 text-sm font-semibold text-foreground transition")
-                        };
-                        rsx! {
-                            button {
-                                class: "{btn_class}",
-                                onclick: move |_| {
-                                    if is_sitting_out {
-                                        coroutine.send(UiMessage::Action(ClientMessage::SitIn));
-                                    } else {
-                                        coroutine.send(UiMessage::Action(ClientMessage::SitOut));
-                                    }
-                                },
-                                "{label}"
-                            }
-                        }
+                // Sit In (shown only when auto-seated out: timeout/disconnect).
+                if gs.game_started && gs.is_sitting_out() {
+                    button {
+                        class: "w-full bg-primary hover:bg-primary-light rounded-lg py-1.5 text-sm font-semibold text-foreground transition",
+                        onclick: move |_| {
+                            coroutine.send(UiMessage::Action(ClientMessage::SitIn));
+                        },
+                        "Sit In"
                     }
                 }
 

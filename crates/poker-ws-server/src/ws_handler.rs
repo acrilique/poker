@@ -500,24 +500,6 @@ async fn process_client_message(msg: &ClientMessage, player_id: u32, room_arc: &
             process_action(player_id, PlayerAction::AllIn, 0, room_arc).await;
         }
 
-        ClientMessage::SitOut => {
-            let mut room = room_arc.lock().await;
-            if room
-                .game_state
-                .players
-                .get(&player_id)
-                .map(|p| p.sitting_out)
-                .unwrap_or(true)
-            {
-                return; // already sitting out or unknown player
-            }
-            room.game_state.set_sitting_out(player_id);
-            broadcast(
-                &mut room.player_senders,
-                &ServerMessage::PlayerSatOut { player_id },
-            );
-        }
-
         ClientMessage::SitIn => {
             let mut room = room_arc.lock().await;
             if !room

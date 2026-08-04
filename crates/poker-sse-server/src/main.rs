@@ -101,7 +101,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/poker/action/call", post(handlers::action_call))
         .route("/poker/action/raise", post(handlers::action_raise))
         .route("/poker/action/allin", post(handlers::action_allin))
-        .route("/poker/action/sitout", post(handlers::action_sitout))
         .route("/poker/action/sitin", post(handlers::action_sitin))
         .route(
             "/poker/action/toggle-late-entry",

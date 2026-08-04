@@ -496,29 +496,6 @@ pub async fn action_raise(
     no_content()
 }
 
-pub async fn action_sitout(
-    State(state): State<AppState>,
-    ReadSignals(signals): ReadSignals<SessionSignals>,
-) -> impl IntoResponse {
-    let Some(ctx) = authorize(&state, &signals).await else {
-        return no_content();
-    };
-    let mut room = ctx.room_arc.lock().await;
-    let pid = ctx.player_id;
-    // Already sitting out (or no such player) — nothing to do.
-    if !matches!(
-        room.game_state.players.get(&pid),
-        Some(p) if !p.sitting_out
-    ) {
-        return no_content();
-    }
-    room.game_state.set_sitting_out(pid);
-    // Sitting-out state changed the player list + controls; re-render state.
-    broadcast_state(&mut room, &ctx.room_id);
-    drop(room);
-    no_content()
-}
-
 pub async fn action_sitin(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<SessionSignals>,
