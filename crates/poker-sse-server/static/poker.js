@@ -50,9 +50,44 @@ function pokerClearSession() {
 // reload below would resurrect the session.
 let _exiting = false;
 
-// Exit: clear the session and reload back to the connect screen.
+// Tell the server we're leaving, so it frees the seat now instead of holding
+// it for the 5-minute grace period (the path a plain reload / tab-close takes).
+// Uses navigator.sendBeacon when available (survives page unload reliably),
+// falling back to a keepalive fetch. The body is the Datastar signals shape the
+// server's ReadSignals<SessionSignals> expects, so no Datastar runtime is
+// needed here — this fires even as the page is tearing down.
+function pokerSendLeave() {
+  const room = pokerLoadRoom();
+  const token = pokerLoadToken();
+  if (!room || !token) return;
+  const body = JSON.stringify({ roomid: room, sessiontoken: token });
+  const url = "/poker/room/leave";
+  if (navigator.sendBeacon) {
+    const blob = new Blob([body], { type: "application/json" });
+    navigator.sendBeacon(url, blob);
+    return;
+  }
+  // Fallback: keepalive lets the request outlive the page.
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// Exit: tell the server, clear the session, and reload back to the connect
+// screen.
+//
+// Only this explicit path sends a leave — a plain reload or tab-close does NOT,
+// so those stay transient (the server holds the seat via the grace period and a
+// reload round-trips cleanly). Adding a `pagehide` beacon would be wrong here:
+// `pagehide` can't distinguish reload from tab-close, and firing a leave on
+// reload would defeat the rejoin-on-reload behavior.
 function pokerExit() {
+  if (_exiting) return;
   _exiting = true;
+  pokerSendLeave();
   pokerClearSession();
   location.reload();
 }

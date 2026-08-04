@@ -38,7 +38,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::render::{self, Ctx};
-use crate::room::{CallerCtx, Fanout, Room, RoomManager, resolve_caller};
+use crate::room::{CallerCtx, Fanout, Room, RoomManager, remove_player_now, resolve_caller};
 use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 
 use crate::AppState;
@@ -350,6 +350,50 @@ pub async fn room_join(
     ReadSignals(signals): ReadSignals<JoinSignals>,
 ) -> impl IntoResponse {
     join_common(state, signals.room_id, signals.name).await
+}
+
+/// `POST /poker/room/leave` — explicit "Exit Game". Distinct from an SSE drop
+/// (reload / tab close / network blip): a leave frees the seat as soon as it
+/// is safe, with no grace-period ghost. See [`RoomManager::leave_room`].
+///
+/// If the leaving player is mid-hand and it is currently their turn, fold via
+/// the normal action path first so the betting loop advances correctly; the
+/// actual seat removal is deferred to the next hand boundary.
+pub async fn room_leave(
+    State(state): State<AppState>,
+    ReadSignals(signals): ReadSignals<SessionSignals>,
+) -> axum::response::Response {
+    let Some(ctx) = authorize(&state, &signals).await else {
+        return no_content();
+    };
+
+    // If it's this player's turn mid-hand, fold through the real action path
+    // so the turn advances (and any single-remaining-player / betting-complete
+    // resolution fires) before we mark them as leaving.
+    let is_their_turn = {
+        let room = ctx.room_arc.lock().await;
+        room.game_state.game_started
+            && room.game_state.current_player_id() == Some(ctx.player_id)
+    };
+    if is_their_turn {
+        process_action(
+            ctx.player_id,
+            PlayerAction::Fold,
+            0,
+            &ctx.room_arc,
+            &ctx.room_id,
+        )
+        .await;
+    }
+
+    let outcome = state.room_manager.leave_room(&ctx.room_id, ctx.player_id).await;
+    tracing::info!(
+        room = %ctx.room_id,
+        player = ctx.player_id,
+        ?outcome,
+        "Player left room"
+    );
+    no_content()
 }
 
 async fn join_common(state: AppState, room_id: String, name: String) -> axum::response::Response {
@@ -1122,6 +1166,53 @@ async fn maybe_start_new_hand(
         room.game_state.waiting_for_players = true;
         broadcast_state(&mut room, room_id);
         return None;
+    }
+
+    // Hand-boundary sweep: hard-remove any player who explicitly left
+    // ([`RoomManager::leave_room`]) during the previous hand. This is the one
+    // index-safe point — `start_new_hand` recomputes every positional index
+    // (dealer / blinds / current actor) from the surviving `player_order`
+    // immediately after, so removing entries here can't desync the betting
+    // loop the way a mid-hand `remove_player` would.
+    let leavers: Vec<u32> = room
+        .players
+        .iter()
+        .filter(|(_, c)| c.wants_leave)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut any_removed = false;
+    for pid in &leavers {
+        remove_player_now(&mut room, room_id, *pid);
+        any_removed = true;
+    }
+    if any_removed {
+        broadcast_state(&mut room, room_id);
+        // If the sweep emptied the room, tear it down (no one left to play).
+        let any_connected = room.players.values().any(|c| c.tx.is_some());
+        if !any_connected {
+            drop(room);
+            // Best-effort: the outer RoomManager owns the map, but this helper
+            // only has the room Arc. The room will be reclaimed when the last
+            // stream's Drop runs `disconnect_player` → `remove_room_if_empty`.
+            return None;
+        }
+        // After removal, re-check whether enough active players remain.
+        let active_after = room
+            .game_state
+            .player_order
+            .iter()
+            .filter(|id| {
+                room.game_state
+                    .players
+                    .get(id)
+                    .is_some_and(|p| !p.sitting_out && p.chips > 0)
+            })
+            .count();
+        if active_after < 2 {
+            room.game_state.waiting_for_players = true;
+            broadcast_state(&mut room, room_id);
+            return None;
+        }
     }
 
     // notify_turn_and_start_timer renders state from this settled snapshot.

@@ -34,8 +34,15 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use crate::render;
 use poker_core::game_logic::GameState;
 
-/// How long a disconnected player's seat is held before permanent removal.
-const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
+/// How long a disconnected player's seat is held before permanent removal,
+/// while other connected players keep the game going.
+pub const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
+
+/// Shorter grace applied when the **last** connected player drops mid-game.
+/// A reload is sub-second; a brief connectivity blip is seconds. This window
+/// covers both without holding a dead room hostage (the old behavior removed
+/// the room instantly, which broke rejoin-on-reload in heads-up / small games).
+pub const LAST_PLAYER_GRACE_PERIOD: Duration = Duration::from_secs(30);
 
 /// Max players per room. A 52-card deck caps two-card hands at 23, but real
 /// tables seat 9–10. Capping here also prevents a deck-exhaustion panic in
@@ -108,6 +115,23 @@ impl From<&RoomError> for RoomErrorKind {
     }
 }
 
+/// Outcome of an explicit [`RoomManager::leave_room`]. Used for logging and
+/// tests; the HTTP handler returns `204` in every case.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LeaveOutcome {
+    /// The player was removed from a lobby (game not started).
+    Left,
+    /// The player was sat out and flagged for removal at the next hand
+    /// boundary (they were mid-hand).
+    FoldedAndLeaving,
+    /// The player was the last in the room and the room has been torn down.
+    RoomRemoved,
+    /// The room no longer exists (already torn down).
+    RoomGone,
+    /// The player was already gone (e.g. a duplicate leave from a second tab).
+    AlreadyLeft,
+}
+
 /// Handle to a per-player outbound channel of rendered SSE events.
 ///
 /// The `/poker/events` stream drains this receiver and forwards each event
@@ -124,6 +148,12 @@ pub struct PlayerConn {
     /// Monotonic generation, bumped on each attach. A stale teardown (from an
     /// older connection) must not clear the current `tx`.
     pub generation: u64,
+    /// Set by [`RoomManager::leave_room`] when the player explicitly exits.
+    /// The seat is held until the next hand boundary (where the engine
+    /// recomputes positional indices), then hard-removed. Distinct from a
+    /// transient disconnect (reload / network blip), which keeps the grace
+    /// period.
+    pub wants_leave: bool,
 }
 
 /// A single poker room.
@@ -357,6 +387,7 @@ impl RoomManager {
             PlayerConn {
                 tx: None,
                 generation: 0,
+                wants_leave: false,
             },
         );
 
@@ -445,6 +476,17 @@ impl RoomManager {
         if !is_current {
             return;
         }
+        // If the player explicitly left ([`RoomManager::leave_room`]), their
+        // seat's fate is owned by the leave flag + hand-boundary sweep — a
+        // transient drop (the SSE stream tearing down after the leave POST)
+        // must not start a grace period that would resurrect them.
+        if room
+            .players
+            .get(&player_id)
+            .is_some_and(|c| c.wants_leave)
+        {
+            return;
+        }
         if let Some(conn) = room.players.get_mut(&player_id) {
             conn.tx = None;
         }
@@ -466,29 +508,27 @@ impl RoomManager {
             };
 
         if game_in_progress {
-            // The grace period holds a seat so the player can reconnect while
-            // others keep the game going. But if this was the last connected
-            // player, there's no game to preserve — even a reconnect would
-            // leave them alone. Holding the room for `SESSION_GRACE_PERIOD`
-            // would block the room name (Create fails with "already exists"),
-            // keep `game_started` true (Join fails with "game in progress"),
-            // and let stale held seats resurface as duplicates if someone
-            // rejoins. Tear the room down instead.
+            // Hold the seat via a grace period so the player can reconnect
+            // (reload / brief connectivity blip) while the game continues.
+            //
+            // While others are connected, use the full [`SESSION_GRACE_PERIOD`]
+            // — the game keeps running and the seat auto-checks/folds. When this
+            // was the *last* connected player, the full 5 minutes would block
+            // the room name (Create fails "already exists"), keep
+            // `game_started` true (Join fails "game in progress"), and let
+            // stale held seats resurface as duplicates on rejoin. A reload is
+            // sub-second, so [`LAST_PLAYER_GRACE_PERIOD`] covers it without
+            // holding a dead room hostage.
             let any_connected = room.players.values().any(|c| c.tx.is_some());
-            if any_connected {
-                self.start_grace_period(room, room_id, player_id).await;
+            let grace = if any_connected {
+                SESSION_GRACE_PERIOD
             } else {
-                drop(room);
-                self.remove_room(room_id).await;
-            }
+                LAST_PLAYER_GRACE_PERIOD
+            };
+            self.start_grace_period(room, room_id, player_id, grace).await;
         } else {
             // Game hasn't started — remove immediately.
-            if let Some(token) = room.player_sessions.remove(&player_id) {
-                room.sessions.remove(&token);
-            }
-            room.players.remove(&player_id);
-            room.game_state.remove_player(player_id);
-            promote_host_if_needed(&mut room, room_id, player_id);
+            remove_player_now(&mut room, room_id, player_id);
             crate::handlers::broadcast_state(&mut room, room_id);
 
             let any_connected = room.players.values().any(|c| c.tx.is_some());
@@ -500,16 +540,87 @@ impl RoomManager {
         }
     }
 
+    /// Explicit, deterministic leave (the "Exit Game" button). Distinct from
+    /// [`disconnect_player`] (a speculative/transient drop): a leave frees the
+    /// seat as soon as it is safe to do so, with no 5-minute ghost.
+    ///
+    /// - **Lobby** (game not started): the player is removed immediately and
+    ///   the room torn down if it's now empty.
+    /// - **In a hand**: mid-hand removal would shift `player_order` indices and
+    ///   desync the betting loop, so the player is sat out (the engine folds
+    ///   them at showdown) and flagged [`PlayerConn::wants_leave`]. The actual
+    ///   seat removal is deferred to the next hand boundary, where
+    ///   `start_new_hand` recomputes every positional index — the one safe
+    ///   point. The caller (`room_leave` handler) folds via `process_action`
+    ///   first if it was this player's turn, so the turn advances correctly.
+    ///
+    /// Returns the outcome for logging/tests; the HTTP handler returns `204`
+    /// regardless.
+    pub async fn leave_room(&self, room_id: &str, player_id: u32) -> LeaveOutcome {
+        let rooms = self.rooms.read().await;
+        let Some(room_arc) = rooms.get(room_id).cloned() else {
+            return LeaveOutcome::RoomGone;
+        };
+        drop(rooms);
+
+        let mut room = room_arc.lock().await;
+
+        // Already left (e.g. a duplicate tab sent a second leave) — no-op.
+        if !room.players.contains_key(&player_id) {
+            return LeaveOutcome::AlreadyLeft;
+        }
+
+        let in_hand =
+            room.game_state.game_started && room.game_state.players.contains_key(&player_id);
+
+        if !in_hand {
+            // Lobby / pre-game: remove now and tear the room down if empty.
+            remove_player_now(&mut room, room_id, player_id);
+            crate::handlers::broadcast_state(&mut room, room_id);
+
+            let any_connected = room.players.values().any(|c| c.tx.is_some());
+            drop(room);
+
+            if !any_connected {
+                remove_room_if_empty(&self.rooms, room_id).await;
+                return LeaveOutcome::RoomRemoved;
+            }
+            return LeaveOutcome::Left;
+        }
+
+        // Mid-hand: sit out (idempotent) and flag for hand-boundary removal.
+        // The engine folds a sitting-out player at showdown; if it was their
+        // turn, the handler has already folded via `process_action`.
+        room.game_state.set_sitting_out(player_id);
+        if let Some(conn) = room.players.get_mut(&player_id) {
+            conn.wants_leave = true;
+            // Drop the live channel so fanout stops targeting them; the SSE
+            // stream's Drop will run disconnect_player, whose generation guard
+            // makes it a no-op against the leave already recorded here.
+            conn.tx = None;
+        }
+        // Cancel any pending grace-period removal from a prior transient drop
+        // — the leave flag now owns this seat's lifetime.
+        room.disconnected_at.remove(&player_id);
+        crate::handlers::broadcast_state(&mut room, room_id);
+        drop(room);
+
+        LeaveOutcome::FoldedAndLeaving
+    }
+
     /// Start (and spawn) the disconnect grace-period countdown. Holds no lock
-    /// after returning — the removal runs in a detached task after
-    /// [`SESSION_GRACE_PERIOD`] elapses. Factored out of
-    /// [`disconnect_player`] to keep that handler readable.
+    /// after returning — the removal runs in a detached task after `grace`
+    /// elapses. Factored out of [`disconnect_player`] to keep that handler
+    /// readable. Callers pick the window: [`SESSION_GRACE_PERIOD`] while
+    /// others keep the game going, [`LAST_PLAYER_GRACE_PERIOD`] when this was
+    /// the last connected player.
     #[allow(clippy::too_many_lines)]
     async fn start_grace_period(
         &self,
         mut room: tokio::sync::MutexGuard<'_, Room>,
         room_id: &str,
         player_id: u32,
+        grace: Duration,
     ) {
         // Start the grace-period countdown; the player stays in game state.
         room.disconnected_at.insert(player_id, Instant::now());
@@ -517,12 +628,11 @@ impl RoomManager {
             room = room_id,
             player = player_id,
             "Player disconnected — seat held for {:?}",
-            SESSION_GRACE_PERIOD,
+            grace,
         );
 
         let rm = self_ref(room_id, &self.rooms).await;
         let rid = room_id.to_string();
-        let grace = SESSION_GRACE_PERIOD;
         let rooms_ref = Arc::clone(&self.rooms);
         drop(room);
 
@@ -583,6 +693,23 @@ async fn remove_room_if_empty(rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>,
             tracing::info!(room_id, "Removed empty room");
         }
     }
+}
+
+/// Permanently remove a player from the room: clears session maps, drops the
+/// connection state, removes them from game state, and promotes a new host if
+/// they were it. Does **not** broadcast — callers render state once after any
+/// batch of removals. Safe to call regardless of whether a game is in progress;
+/// note that mid-hand removal shifts `player_order` indices, so prefer the
+/// hand-boundary sweep in [`RoomManager::leave_room`] / `maybe_start_new_hand`
+/// during a live hand.
+pub(crate) fn remove_player_now(room: &mut Room, room_id: &str, player_id: u32) {
+    if let Some(token) = room.player_sessions.remove(&player_id) {
+        room.sessions.remove(&token);
+    }
+    room.disconnected_at.remove(&player_id);
+    room.players.remove(&player_id);
+    room.game_state.remove_player(player_id);
+    promote_host_if_needed(room, room_id, player_id);
 }
 
 /// Promote a new host if `removed_id` was the host. Called after every

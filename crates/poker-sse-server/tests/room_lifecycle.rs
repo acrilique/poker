@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use poker_core::protocol::BlindConfig;
 use poker_sse_server::AppState;
-use poker_sse_server::room::{Room, RoomManager};
+use poker_sse_server::room::{LeaveOutcome, Room, RoomManager};
 
 /// Build a fresh AppState backed by an empty RoomManager.
 fn app_state() -> AppState {
@@ -133,14 +133,14 @@ async fn ingame_disconnect_sits_out_and_holds_seat() {
     assert!(room.game_state.players.contains_key(&p2));
 }
 
-/// When the **last** connected player disconnects mid-game, the room is torn
-/// down immediately instead of being held for the grace period. Holding it
-/// would block the room name (Create → "already exists"), keep `game_started`
-/// true (Join → "game in progress"), and let stale held seats resurface as
-/// duplicates if someone rejoins. The grace period only makes sense while
-/// other connected players keep the game going.
+/// When the **last** connected player disconnects mid-game, the room is now
+/// held for a short [`LAST_PLAYER_GRACE_PERIOD`] (not torn down instantly).
+/// The old behavior removed the room immediately, which broke rejoin-on-reload
+/// in heads-up / small games: a reload mid-hand with no one else connected
+/// destroyed the room before the token could re-attach. The short window covers
+/// any realistic reload without holding a dead room hostage.
 #[tokio::test]
-async fn ingame_last_disconnect_removes_room() {
+async fn ingame_last_disconnect_holds_room_for_short_grace() {
     let state = app_state();
     let players = room_with_players(&state, "ingame2", &["solo"]).await;
     let (pid, _gen, _rx) = attach_with_rx(&state, "ingame2", &players[0].1).await;
@@ -151,16 +151,73 @@ async fn ingame_last_disconnect_removes_room() {
         room.game_state.game_started = true;
     }
 
-    // The only connected player disconnects mid-game.
+    // The only connected player disconnects mid-game (simulating a reload).
     state
         .room_manager
         .disconnect_player("ingame2", pid, 1)
         .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
+    // Within the grace window the room and seat must still exist — this is the
+    // rejoin-on-reload window for heads-up / single-player games.
+    let room_arc = state.room_manager.get_room("ingame2").await;
     assert!(
-        state.room_manager.get_room("ingame2").await.is_none(),
-        "room should be removed when the last connected player leaves mid-game"
+        room_arc.is_some(),
+        "room should survive the last-player disconnect within the grace window"
+    );
+    let room_arc = room_arc.unwrap();
+    let room = room_arc.lock().await;
+    assert!(
+        room.disconnected_at.contains_key(&pid),
+        "a short grace-period timestamp should be recorded for the last player"
+    );
+    assert!(
+        room.game_state.players.contains_key(&pid),
+        "the disconnected player's seat should still be held"
+    );
+}
+
+/// Reconnecting within the grace window (the reload round-trip) restores the
+/// seat and cancels the pending removal. This is the core rejoin-on-reload
+/// path for heads-up games that previously had no test coverage.
+#[tokio::test]
+async fn heads_up_reload_rejoins_within_grace() {
+    let state = app_state();
+    let players = room_with_players(&state, "hu1", &["solo"]).await;
+    let pid = players[0].0;
+    let token = players[0].1.clone();
+    let (pid_attached, _gen1, _rx1) = attach_with_rx(&state, "hu1", &token).await;
+    assert_eq!(pid_attached, pid);
+
+    {
+        let room_arc = state.room_manager.get_room("hu1").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+    }
+
+    // Player reloads: the SSE stream drops, then re-attaches with the same token.
+    state.room_manager.disconnect_player("hu1", pid, 1).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    // The reload re-attaches the events stream before the short grace expires.
+    let room_arc = state.room_manager.get_room("hu1").await.expect(
+        "room must still exist right after a heads-up disconnect (short grace)",
+    );
+    let (_rx2, _events, gen2) = RoomManager::attach_stream(&room_arc, "hu1", pid, false).await;
+
+    let room_arc = state.room_manager.get_room("hu1").await.unwrap();
+    let room = room_arc.lock().await;
+    assert!(
+        !room.disconnected_at.contains_key(&pid),
+        "re-attach must cancel the grace-period removal"
+    );
+    assert_eq!(
+        room.players.get(&pid).map(|c| c.generation),
+        Some(gen2),
+        "the re-attached connection is the current generation"
+    );
+    assert!(
+        room.players.get(&pid).is_some_and(|c| c.tx.is_some()),
+        "the player should have a live channel again"
     );
 }
 
@@ -192,6 +249,130 @@ async fn host_lobby_disconnect_promotes_next_player() {
     assert_eq!(
         room.game_state.host_id, guest_id,
         "remaining player should be promoted to host"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Explicit leave (POST /poker/room/leave — "Exit Game")
+// ---------------------------------------------------------------------------
+
+/// Leaving from the lobby (game not started) removes the player immediately and
+/// tears the room down if it's now empty. This is the deterministic
+/// "hard-leave" path, distinct from a transient disconnect.
+#[tokio::test]
+async fn lobby_leave_removes_player_and_room() {
+    let state = app_state();
+    let players = room_with_players(&state, "leave1", &["solo"]).await;
+    let (pid, _gen, _rx) = attach_with_rx(&state, "leave1", &players[0].1).await;
+
+    let outcome = state.room_manager.leave_room("leave1", pid).await;
+    assert_eq!(
+        outcome,
+        LeaveOutcome::RoomRemoved,
+        "the last lobby player leaving should tear the room down"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        state.room_manager.get_room("leave1").await.is_none(),
+        "room should be gone after the only player leaves"
+    );
+}
+
+/// Leaving mid-hand does NOT remove the player immediately (mid-hand removal
+/// would shift seat indices); instead they're sat out and flagged for removal
+/// at the next hand boundary. They must not linger as a 5-minute ghost auto-
+/// folding seat — the grace period does not apply to an explicit leave.
+#[tokio::test]
+async fn ingame_leave_sits_out_and_flags_for_boundary_removal() {
+    let state = app_state();
+    let players = room_with_players(&state, "leave2", &["a", "b"]).await;
+    let (p1, _g1, _rx1) = attach_with_rx(&state, "leave2", &players[0].1).await;
+    let (_p2, _g2, _rx2) = attach_with_rx(&state, "leave2", &players[1].1).await;
+
+    {
+        let room_arc = state.room_manager.get_room("leave2").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+    }
+
+    let outcome = state.room_manager.leave_room("leave2", p1).await;
+    assert_eq!(
+        outcome,
+        LeaveOutcome::FoldedAndLeaving,
+        "a mid-hand leave should flag the player, not remove them instantly"
+    );
+
+    let room_arc = state.room_manager.get_room("leave2").await.unwrap();
+    let room = room_arc.lock().await;
+    assert!(
+        room.game_state
+            .players
+            .get(&p1)
+            .is_some_and(|p| p.sitting_out),
+        "leaving mid-hand should sit the player out"
+    );
+    assert!(
+        room.players
+            .get(&p1)
+            .is_some_and(|c| c.wants_leave),
+        "leaving mid-hand should set wants_leave for boundary removal"
+    );
+    assert!(
+        !room.disconnected_at.contains_key(&p1),
+        "an explicit leave must not start a grace period (no ghost seat)"
+    );
+}
+
+/// A leave from a room that no longer exists is reported as `RoomGone` and is
+/// a no-op (e.g. a late/duplicate beacon arriving after teardown).
+#[tokio::test]
+async fn leave_when_room_gone_is_noop() {
+    let state = app_state();
+    let outcome = state.room_manager.leave_room("ghost", 1).await;
+    assert_eq!(outcome, LeaveOutcome::RoomGone);
+}
+
+/// A duplicate leave (e.g. a second tab, or a beacon after the POST already
+/// landed) is idempotent: a mid-hand leave keeps the player in state until the
+/// hand boundary, so a second leave re-flags them (harmlessly) rather than
+/// double-removing. Once the seat is actually gone, a further leave reports
+/// `AlreadyLeft` (covered here via a lobby leave, which removes immediately).
+#[tokio::test]
+async fn duplicate_leave_is_idempotent() {
+    let state = app_state();
+    let players = room_with_players(&state, "leave3", &["a", "b"]).await;
+    let (p1, _g1, _rx1) = attach_with_rx(&state, "leave3", &players[0].1).await;
+    {
+        let room_arc = state.room_manager.get_room("leave3").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+    }
+
+    // First mid-hand leave flags the player.
+    let first = state.room_manager.leave_room("leave3", p1).await;
+    assert_eq!(first, LeaveOutcome::FoldedAndLeaving);
+    // Second leave is idempotent — the player is still seated (held for the
+    // hand boundary), so this just re-asserts the flag.
+    let second = state.room_manager.leave_room("leave3", p1).await;
+    assert_eq!(
+        second,
+        LeaveOutcome::FoldedAndLeaving,
+        "a second mid-hand leave re-flags harmlessly"
+    );
+
+    // A leave for a player who is already actually gone reports AlreadyLeft.
+    // Keep another connected player so the room survives p2's lobby leave.
+    let players2 = room_with_players(&state, "leave3b", &["x", "y"]).await;
+    let (p2, _g2, _rx2) = attach_with_rx(&state, "leave3b", &players2[0].1).await;
+    let (_p3, _g3, _rx3) = attach_with_rx(&state, "leave3b", &players2[1].1).await;
+    state.room_manager.leave_room("leave3b", p2).await;
+    // p2 is gone but the room survives; a beacon arriving after the leave:
+    let late = state.room_manager.leave_room("leave3b", p2).await;
+    assert_eq!(
+        late,
+        LeaveOutcome::AlreadyLeft,
+        "a leave after the player is gone (room still alive) should report AlreadyLeft"
     );
 }
 

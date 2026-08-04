@@ -138,6 +138,7 @@ pub fn build_router(config: &ServerConfig) -> Router {
         .route("/poker/events", get(handlers::events))
         .route("/poker/room/create", post(handlers::room_create))
         .route("/poker/room/join", post(handlers::room_join))
+        .route("/poker/room/leave", post(handlers::room_leave))
         .route("/poker/action/start", post(handlers::action_start))
         .route("/poker/action/fold", post(handlers::action_fold))
         .route("/poker/action/check", post(handlers::action_check))
