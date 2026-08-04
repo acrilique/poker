@@ -25,12 +25,12 @@ use std::io::Read;
 use std::io::Write;
 
 use brotli::CompressorReader as BrotliEncoder;
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 
+use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_core::poker::{Card, CardNumber, CardSuit};
 use poker_core::protocol::BlindConfig;
-use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_sse_server::render::{self, Ctx};
 
 /// Serialize one Datastar event to the SSE wire format. Reproduces the format
@@ -176,7 +176,10 @@ fn main() {
         // Give the current actor a real hand so hole cards render.
         let actor = preflop.current_player_id().unwrap_or(1);
         if let Some(p) = preflop.players.get_mut(&actor) {
-            p.hole_cards = Some((hole(CardNumber::Ace, CardSuit::Spades), hole(CardNumber::King, CardSuit::Spades)));
+            p.hole_cards = Some((
+                hole(CardNumber::Ace, CardSuit::Spades),
+                hole(CardNumber::King, CardSuit::Spades),
+            ));
         }
     }
 
@@ -185,7 +188,10 @@ fn main() {
     {
         let viewer = flop.player_order.first().copied().unwrap_or(1);
         if let Some(p) = flop.players.get_mut(&viewer) {
-            p.hole_cards = Some((hole(CardNumber::Queen, CardSuit::Hearts), hole(CardNumber::Jack, CardSuit::Hearts)));
+            p.hole_cards = Some((
+                hole(CardNumber::Queen, CardSuit::Hearts),
+                hole(CardNumber::Jack, CardSuit::Hearts),
+            ));
         }
     }
 
@@ -202,7 +208,10 @@ fn main() {
         }
         let viewer = river.player_order.first().copied().unwrap_or(1);
         if let Some(p) = river.players.get_mut(&viewer) {
-            p.hole_cards = Some((hole(CardNumber::Ten, CardSuit::Diamonds), hole(CardNumber::Nine, CardSuit::Diamonds)));
+            p.hole_cards = Some((
+                hole(CardNumber::Ten, CardSuit::Diamonds),
+                hole(CardNumber::Nine, CardSuit::Diamonds),
+            ));
         }
     }
 
@@ -271,6 +280,10 @@ fn main() {
 
     println!("\nNotes:");
     println!("  - gzip uses flate2 default (level 6); brotli uses quality 4 (tower-http default).");
-    println!("  - Sizes are the SSE wire bytes (event:/data:/blank-line framing), per state update.");
-    println!("  - A live game pushes one such payload to every connected viewer on each terminal point.");
+    println!(
+        "  - Sizes are the SSE wire bytes (event:/data:/blank-line framing), per state update."
+    );
+    println!(
+        "  - A live game pushes one such payload to every connected viewer on each terminal point."
+    );
 }

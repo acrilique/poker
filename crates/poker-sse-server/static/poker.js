@@ -44,8 +44,15 @@ function pokerClearSession() {
   localStorage.removeItem(POKER_KEYS.token);
 }
 
+// Set by pokerExit() so pokerHandleFetch skips re-persisting the session on
+// the final datastar-fetch `finished` event fired during teardown. Without it,
+// exit would be a no-op: the in-memory signals still hold the token, so the
+// reload below would resurrect the session.
+let _exiting = false;
+
 // Exit: clear the session and reload back to the connect screen.
 function pokerExit() {
+  _exiting = true;
   pokerClearSession();
   location.reload();
 }
@@ -118,6 +125,9 @@ if (document.readyState === "loading") {
 // into localStorage so a reload can re-open the stream, and clear it when the
 // server blanks them (game-over teardown).
 function pokerHandleFetch(token, room) {
+  // See _exiting: skip the teardown-time `finished` event so we don't undo
+  // pokerClearSession().
+  if (_exiting) return;
   if (token && room) {
     pokerSaveSession(room, token);
   } else {

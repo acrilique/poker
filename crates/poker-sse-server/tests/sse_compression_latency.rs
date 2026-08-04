@@ -34,15 +34,15 @@
 use std::io::Read;
 use std::time::{Duration, Instant};
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
-use axum::Router;
 use brotli::Decompressor as BrotliDecoder;
 use flate2::read::GzDecoder;
-use futures_util::stream::{self};
 use futures_util::StreamExt;
+use futures_util::stream::{self};
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
 
@@ -108,9 +108,8 @@ async fn probe(label: &str, app: Router, accept_encoding: &str) -> Probe {
         let _ = axum::serve(listener, app).await;
     });
 
-    let client =
-        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-            .build_http::<Body>();
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build_http::<Body>();
     let mut req = Request::builder()
         .uri(format!("http://{addr}/sse"))
         .body(Body::empty())
@@ -181,14 +180,12 @@ fn decode(encoding: &str, encoded: &[u8]) -> Vec<u8> {
 async fn compare_latency() {
     // A plain (no-compression) app and one with SSE-permitting compression.
     let app_plain = Router::new().route("/sse", get(two_events));
-    let app_compressed = Router::new()
-        .route("/sse", get(two_events))
-        .layer(
-            CompressionLayer::new()
-                .br(true)
-                .gzip(true)
-                .compress_when(predicate_allowing_sse()),
-        );
+    let app_compressed = Router::new().route("/sse", get(two_events)).layer(
+        CompressionLayer::new()
+            .br(true)
+            .gzip(true)
+            .compress_when(predicate_allowing_sse()),
+    );
 
     let identity = probe("identity", app_plain.clone(), "identity").await;
     let br = probe("brotli", app_compressed.clone(), "br").await;
@@ -222,14 +219,12 @@ async fn compare_latency() {
 #[tokio::test]
 async fn brotli_sse_flushes_per_event() {
     let app_plain = Router::new().route("/sse", get(two_events));
-    let app_compressed = Router::new()
-        .route("/sse", get(two_events))
-        .layer(
-            CompressionLayer::new()
-                .br(true)
-                .gzip(true)
-                .compress_when(predicate_allowing_sse()),
-        );
+    let app_compressed = Router::new().route("/sse", get(two_events)).layer(
+        CompressionLayer::new()
+            .br(true)
+            .gzip(true)
+            .compress_when(predicate_allowing_sse()),
+    );
 
     let identity = probe("identity", app_plain, "identity").await;
     let br = probe("brotli", app_compressed.clone(), "br").await;
@@ -273,16 +268,8 @@ async fn brotli_sse_flushes_per_event() {
     // is produced. If the encoder buffered across the gap, the first frame
     // would arrive at ~GAP_MS (both batched). Fails if async-compression
     // regresses its auto-flush.
-    let br_first = br
-        .chunks
-        .first()
-        .map(|c| c.t_ms)
-        .unwrap_or(f64::INFINITY);
-    let gz_first = gz
-        .chunks
-        .first()
-        .map(|c| c.t_ms)
-        .unwrap_or(f64::INFINITY);
+    let br_first = br.chunks.first().map(|c| c.t_ms).unwrap_or(f64::INFINITY);
+    let gz_first = gz.chunks.first().map(|c| c.t_ms).unwrap_or(f64::INFINITY);
     let bound = (GAP_MS as f64) * 0.4;
     println!(
         "first-frame latency: brotli {br_first:.2} ms, gzip {gz_first:.2} ms (must be < {bound:.0} ms)"

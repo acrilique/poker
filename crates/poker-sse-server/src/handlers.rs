@@ -21,22 +21,24 @@
 //! then fans the resulting [`DatastarEvent`]s to the right players' SSE
 //! streams.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::task::{Context, Poll};
 
 use askama::Template;
 use axum::extract::State;
 use axum::response::{Html, IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use poker_core::poker::Hand;
 use poker_core::protocol::{BlindConfig, CardInfo, PlayerAction, card_to_info};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use crate::render::{self, Ctx};
 use crate::room::{CallerCtx, Fanout, Room, RoomManager, resolve_caller};
+use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 
 use crate::AppState;
 
@@ -66,6 +68,16 @@ fn f64_to_u32(x: f64) -> u32 {
 /// Clamp a `u64` down into a `u32` (out-of-range → `u32::MAX`).
 fn u64_to_u32(x: u64) -> u32 {
     u32::try_from(x).unwrap_or(u32::MAX)
+}
+
+/// Coerce a signal `Value` (number or string from a bound input) into an `f64`.
+/// Strings are trimmed before parsing; unparseable/other types → `0.0`.
+fn value_as_f64(v: &serde_json::Value) -> f64 {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,9 +141,74 @@ pub struct RaiseSignals {
     pub raise_amt: serde_json::Value,
 }
 
+/// Host-only settings update (mirrors [`CreateSignals`], sent from the
+/// in-game controls panel). All fields are `serde_json::Value` because the
+/// connect-screen inputs bind to string-valued signals.
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct UpdateSettingsSignals {
+    #[serde(rename = "roomid")]
+    pub room_id: String,
+    #[serde(rename = "sessiontoken")]
+    pub session_token: String,
+    #[serde(rename = "blindmins")]
+    pub blind_mins: serde_json::Value,
+    #[serde(rename = "blindpct")]
+    pub blind_pct: serde_json::Value,
+    #[serde(rename = "stackbbs")]
+    pub stack_bbs: serde_json::Value,
+}
+
 // ---------------------------------------------------------------------------
 // SSE stream (the read side)
 // ---------------------------------------------------------------------------
+
+/// Runs teardown on client disconnect. On reload/tab-close, hyper drops the
+/// response future, so the `stream::once` finalizer below never runs. Cleanup
+/// belongs in `Drop`, which spawns [`RoomManager::disconnect_player`]. That's
+/// idempotent (generation guard), so this drop path and the server-side path
+/// can both fire.
+struct DisconnectGuard {
+    inner: Option<Pin<Box<dyn Stream<Item = SseItem> + Send>>>,
+    /// `Some` until `Drop` takes it to spawn the teardown task.
+    teardown: Option<(
+        Arc<RoomManager>,
+        String, // room_id
+        u32,    // player_id
+        u64,    // connection generation
+    )>,
+}
+
+/// Item type of the `/poker/events` SSE stream: an axum `Event`, or an
+/// infallible error (the inner stream never errors).
+type SseItem = Result<axum::response::sse::Event, std::convert::Infallible>;
+
+impl Stream for DisconnectGuard {
+    type Item = SseItem;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        this.inner
+            .as_mut()
+            .map_or_else(|| Poll::Ready(None), |s| s.as_mut().poll_next(cx))
+    }
+}
+
+impl Drop for DisconnectGuard {
+    fn drop(&mut self) {
+        if let Some((manager, room_id, pid, generation)) = self.teardown.take() {
+            tracing::info!(
+                room = %room_id,
+                player = pid,
+                generation,
+                "SSE stream dropped — spawning disconnect teardown"
+            );
+            tokio::spawn(async move {
+                manager.disconnect_player(&room_id, pid, generation).await;
+            });
+        }
+    }
+}
 
 pub async fn events(
     State(state): State<AppState>,
@@ -148,9 +225,10 @@ pub async fn events(
         Ok(c) => c,
         Err(e) => {
             let err = render::error_events_pub(&e);
-            let stream = futures_util::stream::iter(err.into_iter().map(|ev| {
-                Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())
-            }));
+            let stream = futures_util::stream::iter(
+                err.into_iter()
+                    .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
+            );
             return Sse::new(stream).into_response();
         }
     };
@@ -169,9 +247,10 @@ pub async fn events(
         evs.push(render::patch_signals(
             &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
         ));
-        let stream = futures_util::stream::iter(evs.into_iter().map(|ev| {
-            Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())
-        }));
+        let stream = futures_util::stream::iter(
+            evs.into_iter()
+                .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
+        );
         return Sse::new(stream).into_response();
     }
 
@@ -182,23 +261,30 @@ pub async fn events(
     let manager2 = manager.clone();
     let rid = room_id.clone();
 
-    let stream = futures_util::stream::iter(initial.into_iter().map(|ev| {
-        Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())
-    }))
+    let stream = futures_util::stream::iter(
+        initial
+            .into_iter()
+            .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
+    )
     .chain(
         tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| Ok(ev.write_as_axum_sse_event())),
     )
     .chain(futures_util::stream::once(async move {
-        // Stream closed: detach and start the grace period if mid-game. Pass
-        // this connection's generation so a stale teardown can't clobber a
-        // newer attach (e.g. a second tab that has since taken over).
+        // Server-side close path: fires when the inner channel sender is
+        // dropped (e.g. the seat is reclaimed elsewhere). Doesn't fire on
+        // client disconnect — see [`DisconnectGuard`].
         manager2.detach_stream(&rid, pid, generation).await;
-        tracing::info!(room = %rid, player = pid, generation, "SSE stream closed");
+        tracing::info!(room = %rid, player = pid, generation, "SSE stream closed (server-side)");
         // Yield nothing further; this once() exists only for the side effect.
         Ok(datastar::prelude::PatchSignals::new("{}").write_as_axum_sse_event())
     }));
 
-    Sse::new(stream)
+    let guarded = DisconnectGuard {
+        inner: Some(Box::pin(stream)),
+        teardown: Some((manager.clone(), room_id.clone(), pid, generation)),
+    };
+
+    Sse::new(guarded)
         .keep_alive(
             axum::response::sse::KeepAlive::new()
                 .interval(std::time::Duration::from_secs(15))
@@ -215,18 +301,11 @@ pub async fn room_create(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<CreateSignals>,
 ) -> impl IntoResponse {
-    fn as_f64(v: &serde_json::Value) -> f64 {
-        match v {
-            serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0),
-            serde_json::Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
-            _ => 0.0,
-        }
-    }
     let blind_config = BlindConfig {
-        interval_secs: f64_to_u64(as_f64(&signals.blind_mins)).saturating_mul(60),
-        increase_percent: f64_to_u32(as_f64(&signals.blind_pct)),
+        interval_secs: f64_to_u64(value_as_f64(&signals.blind_mins)).saturating_mul(60),
+        increase_percent: f64_to_u32(value_as_f64(&signals.blind_pct)),
     };
-    let starting_bbs = f64_to_u32(as_f64(&signals.stack_bbs)).max(1);
+    let starting_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
 
     match state
         .room_manager
@@ -285,9 +364,11 @@ async fn join_common(state: AppState, room_id: String, name: String) -> axum::re
 
 /// Render events into a short-lived SSE response (for POST handlers).
 fn events_response(events: Vec<datastar::DatastarEvent>) -> axum::response::Response {
-    let stream = futures_util::stream::iter(events.into_iter().map(|ev| {
-        Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())
-    }));
+    let stream = futures_util::stream::iter(
+        events
+            .into_iter()
+            .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
+    );
     Sse::new(stream).into_response()
 }
 
@@ -400,9 +481,7 @@ pub async fn action_raise(
     };
     let amount = match &signals.raise_amt {
         serde_json::Value::Number(n) => u64_to_u32(n.as_u64().unwrap_or(0)),
-        serde_json::Value::String(s) => {
-            f64_to_u32(s.trim().parse::<f64>().unwrap_or(0.0))
-        }
+        serde_json::Value::String(s) => f64_to_u32(s.trim().parse::<f64>().unwrap_or(0.0)),
         _ => 0,
     };
     process_action(
@@ -518,6 +597,53 @@ pub async fn action_toggle_late_entry(
     }
     room.game_state.allow_late_entry = !room.game_state.allow_late_entry;
     // Late-entry toggle only changes the controls panel; re-render state.
+    broadcast_state(&mut room, &ctx.room_id);
+    drop(room);
+    no_content()
+}
+
+pub async fn action_update_settings(
+    State(state): State<AppState>,
+    ReadSignals(signals): ReadSignals<UpdateSettingsSignals>,
+) -> impl IntoResponse {
+    let session = SessionSignals {
+        room_id: signals.room_id.clone(),
+        session_token: signals.session_token.clone(),
+    };
+    let Some(ctx) = authorize(&state, &session).await else {
+        return no_content();
+    };
+    let mut room = ctx.room_arc.lock().await;
+    if room.game_state.host_id != ctx.player_id {
+        send_error(
+            &mut room,
+            &ctx.room_id,
+            ctx.player_id,
+            "Only the host can perform this action",
+        );
+        return no_content();
+    }
+
+    let new_config = BlindConfig {
+        interval_secs: f64_to_u64(value_as_f64(&signals.blind_mins)).saturating_mul(60),
+        increase_percent: f64_to_u32(value_as_f64(&signals.blind_pct)),
+    };
+    room.game_state.blind_config = new_config;
+    // Room.blind_config mirrors game_state's.
+    room.blind_config = new_config;
+
+    // `starting_bbs` is frozen into `starting_chips` at game start, so only
+    // apply it pre-game.
+    if !room.game_state.game_started {
+        room.game_state.starting_bbs = f64_to_u32(value_as_f64(&signals.stack_bbs)).max(1);
+    }
+
+    // Re-anchor the schedule so the catch-up loop in start_new_hand doesn't
+    // step blinds repeatedly when the interval changes.
+    if room.game_state.game_started && new_config.is_enabled() {
+        room.game_state.last_blind_increase = Some(std::time::Instant::now());
+    }
+
     broadcast_state(&mut room, &ctx.room_id);
     drop(room);
     no_content()
@@ -766,7 +892,11 @@ async fn process_action_with_room(
                 }
             }
             room.game_state.pot = room.game_state.pot.saturating_add(call_amount);
-            let entry = room.game_state.pot_contributions.entry(player_id).or_insert(0);
+            let entry = room
+                .game_state
+                .pot_contributions
+                .entry(player_id)
+                .or_insert(0);
             *entry = entry.saturating_add(call_amount);
         }
         PlayerAction::Raise => {
@@ -1073,7 +1203,10 @@ fn notify_turn_and_start_timer(
 
     // Bump the turn counter (invalidates stale timer tasks) and stamp when
     // this turn began (for mid-turn reconnects), before rendering.
-    let turn = room.turn_counter.fetch_add(1, Ordering::SeqCst).saturating_add(1);
+    let turn = room
+        .turn_counter
+        .fetch_add(1, Ordering::SeqCst)
+        .saturating_add(1);
     room.turn_started_at = Some(std::time::Instant::now());
 
     if room.game_state.is_current_player_sitting_out() {
@@ -1257,7 +1390,11 @@ async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
         room.players
             .keys()
             .map(|&viewer| {
-                let events = vec![render::equity_table_events(&ctx, viewer, &hands_with_equity)];
+                let events = vec![render::equity_table_events(
+                    &ctx,
+                    viewer,
+                    &hands_with_equity,
+                )];
                 (viewer, events)
             })
             .collect()

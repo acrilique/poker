@@ -172,6 +172,18 @@ pub struct HostControls {
     pub allow_late_entry: bool,
 }
 
+/// Current blind/stack config, stringified for input `value` attributes.
+/// Shown to the host in the editable settings block of the controls panel.
+#[derive(Clone, Default)]
+pub struct HostSettings {
+    /// Blind interval in minutes (`interval_secs / 60`). Empty string → 0.
+    pub blind_mins: String,
+    /// Blind rise percentage.
+    pub blind_pct: String,
+    /// Starting stack in big blinds. Only shown pre-game (frozen at start).
+    pub stack_bbs: String,
+}
+
 #[derive(Template)]
 #[template(path = "controls.html")]
 pub struct ControlsTpl {
@@ -179,6 +191,7 @@ pub struct ControlsTpl {
     pub game_started: bool,
     pub host: HostControls,
     pub sitting_out: bool,
+    pub settings: HostSettings,
 }
 
 #[derive(Template)]
@@ -253,7 +266,6 @@ fn render_or_log<T: Template>(tpl: T, region: &'static str) -> String {
     })
 }
 
-
 /// Render context: game state plus per-room metadata the templates need.
 pub struct Ctx<'a> {
     pub gs: &'a GameState,
@@ -298,9 +310,7 @@ fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let ms = u128::from(secs)
-            .saturating_mul(1000)
-            .saturating_add(now);
+        let ms = u128::from(secs).saturating_mul(1000).saturating_add(now);
         ms.to_string()
     });
     Some(BlindsTimerView {
@@ -405,7 +415,10 @@ fn seat_at(gs: &GameState, base: usize, offset: usize, seats: usize) -> Option<u
     if seats == 0 {
         return None;
     }
-    let idx = base.rem_euclid(seats).saturating_add(offset).rem_euclid(seats);
+    let idx = base
+        .rem_euclid(seats)
+        .saturating_add(offset)
+        .rem_euclid(seats);
     gs.player_order.get(idx).copied()
 }
 
@@ -479,10 +492,7 @@ fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
         .iter()
         .filter_map(|&pid| {
             let p = gs.players.get(&pid)?;
-            if !matches!(
-                p.status,
-                PlayerStatus::Active | PlayerStatus::AllIn
-            ) {
+            if !matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn) {
                 return None;
             }
             let (c1, c2) = p.hole_cards?;
@@ -568,7 +578,10 @@ fn render_action_bar(gs: &GameState, viewer: u32) -> String {
     let max_raise = player.chips.saturating_sub(to_call);
     let pct_amount = |pct: u32| -> u32 {
         let raw = u64::from(gs.pot).saturating_mul(u64::from(pct)) / 100;
-        u32::try_from(raw).unwrap_or(u32::MAX).max(gs.min_raise).min(max_raise)
+        u32::try_from(raw)
+            .unwrap_or(u32::MAX)
+            .max(gs.min_raise)
+            .min(max_raise)
     };
     let presets: Vec<Preset> = if can_raise || can_allin {
         vec![
@@ -653,6 +666,11 @@ fn render_controls(ctx: &Ctx, viewer: u32) -> String {
                 allow_late_entry: gs.allow_late_entry,
             },
             sitting_out,
+            settings: HostSettings {
+                blind_mins: (gs.blind_config.interval_secs / 60).to_string(),
+                blind_pct: gs.blind_config.increase_percent.to_string(),
+                stack_bbs: gs.starting_bbs.to_string(),
+            },
         },
         "controls",
     )

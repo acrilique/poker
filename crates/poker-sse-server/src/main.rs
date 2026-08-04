@@ -35,9 +35,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
+use poker_sse_server::AppState;
 use poker_sse_server::handlers;
 use poker_sse_server::room::RoomManager;
-use poker_sse_server::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -107,7 +107,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/poker/action/toggle-late-entry",
             post(handlers::action_toggle_late_entry),
         )
-        .layer(CompressionLayer::new().br(true).gzip(true).compress_when(compress_when))
+        .route(
+            "/poker/action/update-settings",
+            post(handlers::action_update_settings),
+        )
+        .layer(
+            CompressionLayer::new()
+                .br(true)
+                .gzip(true)
+                .compress_when(compress_when),
+        )
         .layer(cors)
         .with_state(state);
 

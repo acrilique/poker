@@ -31,8 +31,8 @@ use poker_core::protocol::{BlindConfig, RoomErrorKind, RoomIdError, validate_roo
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
-use poker_core::game_logic::GameState;
 use crate::render;
+use poker_core::game_logic::GameState;
 
 /// How long a disconnected player's seat is held before permanent removal.
 const SESSION_GRACE_PERIOD: Duration = Duration::from_secs(5 * 60); // 5 minutes
@@ -474,6 +474,7 @@ impl RoomManager {
             }
             room.players.remove(&player_id);
             room.game_state.remove_player(player_id);
+            promote_host_if_needed(&mut room, room_id, player_id);
             crate::handlers::broadcast_state(&mut room, room_id);
 
             let any_connected = room.players.values().any(|c| c.tx.is_some());
@@ -527,6 +528,7 @@ impl RoomManager {
                     }
                     room.players.remove(&player_id);
                     room.game_state.remove_player(player_id);
+                    promote_host_if_needed(&mut room, &rid, player_id);
                     crate::handlers::broadcast_state(&mut room, &rid);
                     tracing::info!(
                         room = %rid,
@@ -555,10 +557,7 @@ impl RoomManager {
 
 /// Re-check (under the room lock) that a room is still empty, then drop it.
 /// Guards against a reconnect landing between the outer check and the removal.
-async fn remove_room_if_empty(
-    rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>,
-    room_id: &str,
-) {
+async fn remove_room_if_empty(rooms: &RwLock<HashMap<String, Arc<Mutex<Room>>>>, room_id: &str) {
     let mut rooms = rooms.write().await;
     if let Some(room_arc) = rooms.get(room_id) {
         let room = room_arc.lock().await;
@@ -569,6 +568,20 @@ async fn remove_room_if_empty(
             drop(rooms);
             tracing::info!(room_id, "Removed empty room");
         }
+    }
+}
+
+/// Promote a new host if `removed_id` was the host. Called after every
+/// permanent removal so a host leaving doesn't lock everyone out of
+/// host-only actions.
+fn promote_host_if_needed(room: &mut Room, room_id: &str, removed_id: u32) {
+    if let Some(next) = room.game_state.promote_next_host(removed_id) {
+        tracing::info!(
+            room = room_id,
+            removed = removed_id,
+            promoted = next,
+            "Host left — promoted next player"
+        );
     }
 }
 

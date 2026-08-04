@@ -25,9 +25,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::poker::{Board, Card, Hand, get_all_cards};
-use crate::protocol::{
-    BlindConfig, CardInfo, PlayerAction, ServerMessage, Stage, card_to_info,
-};
+use crate::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage, Stage, card_to_info};
 use rand::rng;
 use rand::seq::SliceRandom;
 
@@ -206,8 +204,7 @@ impl GameState {
         } else {
             self.big_blind
         };
-        let starting_chips =
-            chips_override.unwrap_or_else(|| self.starting_bbs.saturating_mul(bb));
+        let starting_chips = chips_override.unwrap_or_else(|| self.starting_bbs.saturating_mul(bb));
         let player = Player {
             id: self.next_player_id,
             name,
@@ -226,6 +223,18 @@ impl GameState {
     pub fn remove_player(&mut self, id: u32) {
         self.players.remove(&id);
         self.player_order.retain(|&pid| pid != id);
+    }
+
+    /// Promote a new host if the player just removed was the host.
+    pub fn promote_next_host(&mut self, removed_id: u32) -> Option<u32> {
+        if self.host_id != removed_id || self.player_order.is_empty() {
+            return None;
+        }
+        // player_order holds remaining players; pick the lowest id for
+        // deterministic promotion across transports.
+        let next = *self.player_order.iter().min()?;
+        self.host_id = next;
+        Some(next)
     }
 
     pub fn player_count(&self) -> usize {
@@ -265,13 +274,14 @@ impl GameState {
     /// `game_started = false` and `phase = Lobby` only in [`resolve_hand`],
     /// once a single player holds all the chips. A game that never started
     /// (`hand_number == 0`) is not "over".
-    #[allow(dead_code, reason = "used by the poker-sse-server crate; the WS server has no equivalent call site yet")]
+    #[allow(
+        dead_code,
+        reason = "used by the poker-sse-server crate; the WS server has no equivalent call site yet"
+    )]
     pub const fn is_game_over(&self) -> bool {
         // Note: no call site lives inside poker-core itself; both server crates
         // consume this from their transport layers.
-        !self.game_started
-            && matches!(self.phase, GamePhase::Lobby)
-            && self.hand_number > 0
+        !self.game_started && matches!(self.phase, GamePhase::Lobby) && self.hand_number > 0
     }
 
     /// Get players who can still act (active but not all-in).
@@ -305,10 +315,6 @@ impl GameState {
 
         // Blind increases run on a wall-clock schedule anchored to game start.
         // Players don't see a step until the next hand (when blinds are posted).
-        // The anchor advances by exactly one interval per increase and the loop
-        // catches up all missed levels after a long pause or a hand spanning
-        // multiple intervals. Resetting to `Instant::now()` on each step would
-        // drift and drop skipped levels.
         if self.blind_config.is_enabled()
             && let Some(mut last) = self.last_blind_increase
         {
@@ -793,10 +799,9 @@ impl GameState {
             let showdown_hands: Vec<(u32, [CardInfo; 2], String)> = hands_to_show
                 .iter()
                 .map(|(id, cards, hand)| {
-                    let rank = hand.best(&board).map_or_else(
-                        || "Unknown".to_string(),
-                        |full| format!("{}", full.rank()),
-                    );
+                    let rank = hand
+                        .best(&board)
+                        .map_or_else(|| "Unknown".to_string(), |full| format!("{}", full.rank()));
                     (*id, *cards, rank)
                 })
                 .collect();
@@ -1507,22 +1512,8 @@ mod tests {
                     Some(royal_flush_hand()),
                     100,
                 ),
-                (
-                    2,
-                    "Bob",
-                    100,
-                    PlayerStatus::Active,
-                    Some(low_hand()),
-                    100,
-                ),
-                (
-                    3,
-                    "Charlie",
-                    50,
-                    PlayerStatus::Folded,
-                    None,
-                    0,
-                ),
+                (2, "Bob", 100, PlayerStatus::Active, Some(low_hand()), 100),
+                (3, "Charlie", 50, PlayerStatus::Folded, None, 0),
             ],
             standard_board(),
         );
@@ -1577,7 +1568,10 @@ mod tests {
             })
             .expect("GameOver should fire when exactly one player has chips");
         assert_eq!(winner, 1);
-        assert!(!gs.game_started, "game_started must be cleared on game over");
+        assert!(
+            !gs.game_started,
+            "game_started must be cleared on game over"
+        );
         assert!(gs.is_game_over());
     }
 
@@ -1700,5 +1694,47 @@ mod tests {
             "exactly one step after one more interval"
         );
         assert_eq!(latest_big_blind(&msgs), 160);
+    }
+
+    /// Host removed → host rights go to the lowest-id remaining player.
+    #[test]
+    fn test_promote_next_host_promotes_lowest_remaining() {
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id; // id 1
+        let p2 = gs.add_player("two".into()).id; // id 2
+        let p3 = gs.add_player("three".into()).id; // id 3
+        gs.host_id = host;
+
+        gs.remove_player(host);
+        let promoted = gs.promote_next_host(host);
+        assert_eq!(promoted, Some(p2));
+        assert_eq!(gs.host_id, p2);
+        // p3 remains present.
+        assert!(gs.players.contains_key(&p3));
+    }
+
+    /// Removing a non-host player leaves `host_id` untouched.
+    #[test]
+    fn test_promote_next_host_noop_for_non_host() {
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        let other = gs.add_player("other".into()).id;
+        gs.host_id = host;
+
+        gs.remove_player(other);
+        assert_eq!(gs.promote_next_host(other), None);
+        assert_eq!(gs.host_id, host);
+    }
+
+    /// Last player removed → no one to promote, returns `None`.
+    #[test]
+    fn test_promote_next_host_none_when_empty() {
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        gs.host_id = host;
+
+        gs.remove_player(host);
+        assert_eq!(gs.promote_next_host(host), None);
+        assert!(gs.player_order.is_empty());
     }
 }
