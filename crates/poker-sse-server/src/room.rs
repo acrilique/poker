@@ -466,7 +466,21 @@ impl RoomManager {
             };
 
         if game_in_progress {
-            self.start_grace_period(room, room_id, player_id).await;
+            // The grace period holds a seat so the player can reconnect while
+            // others keep the game going. But if this was the last connected
+            // player, there's no game to preserve — even a reconnect would
+            // leave them alone. Holding the room for `SESSION_GRACE_PERIOD`
+            // would block the room name (Create fails with "already exists"),
+            // keep `game_started` true (Join fails with "game in progress"),
+            // and let stale held seats resurface as duplicates if someone
+            // rejoins. Tear the room down instead.
+            let any_connected = room.players.values().any(|c| c.tx.is_some());
+            if any_connected {
+                self.start_grace_period(room, room_id, player_id).await;
+            } else {
+                drop(room);
+                self.remove_room(room_id).await;
+            }
         } else {
             // Game hasn't started — remove immediately.
             if let Some(token) = room.player_sessions.remove(&player_id) {

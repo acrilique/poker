@@ -133,6 +133,37 @@ async fn ingame_disconnect_sits_out_and_holds_seat() {
     assert!(room.game_state.players.contains_key(&p2));
 }
 
+/// When the **last** connected player disconnects mid-game, the room is torn
+/// down immediately instead of being held for the grace period. Holding it
+/// would block the room name (Create → "already exists"), keep `game_started`
+/// true (Join → "game in progress"), and let stale held seats resurface as
+/// duplicates if someone rejoins. The grace period only makes sense while
+/// other connected players keep the game going.
+#[tokio::test]
+async fn ingame_last_disconnect_removes_room() {
+    let state = app_state();
+    let players = room_with_players(&state, "ingame2", &["solo"]).await;
+    let (pid, _gen, _rx) = attach_with_rx(&state, "ingame2", &players[0].1).await;
+
+    {
+        let room_arc = state.room_manager.get_room("ingame2").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+    }
+
+    // The only connected player disconnects mid-game.
+    state
+        .room_manager
+        .disconnect_player("ingame2", pid, 1)
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert!(
+        state.room_manager.get_room("ingame2").await.is_none(),
+        "room should be removed when the last connected player leaves mid-game"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Host promotion
 // ---------------------------------------------------------------------------
