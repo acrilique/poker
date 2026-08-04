@@ -1,0 +1,45 @@
+[package]
+name = "poker-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop client for the poker app — OS webview on the poker-sse-server UI"
+license = "MIT"
+
+[[bin]]
+name = "poker-desktop"
+path = "src/main.rs"
+
+[dependencies]
+poker-sse-server = { path = "../poker-sse-server" }
+
+clap = { version = "4.5.60", features = ["derive"] }
+local-ip-address = "0.6"
+muda = "0.19"
+tao = "0.36"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wry = "0.56"
+
+# Linux-only: needed to name `gtk::Container` for muda's menu attachment.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# DENY PANICS:
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
