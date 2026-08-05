@@ -20,13 +20,14 @@
 //! State is rendered as morphs of the stable-ID regions (`#player-list`,
 //! `#table`, `#hole-cards`, `#action-bar`, `#controls`, `#game-root`).
 //! Private data (hole cards, the actionable action bar) is rendered per viewer
-//! and sent only down that player's stream. Transient errors go via
-//! `ExecuteScript` alerts (no morph target).
+//! and sent only down that player's stream. Transient messages (errors and
+//! notices) drive the always-mounted `#toast` region via the `_toast` local
+//! signal — see [`toast_events`] / [`error_events_pub`] / [`notice_events`].
 
 use askama::Template;
 use datastar::DatastarEvent;
 use datastar::consts::ElementPatchMode;
-use datastar::prelude::{ExecuteScript, PatchElements, PatchSignals};
+use datastar::prelude::{PatchElements, PatchSignals};
 use poker_core::protocol::{CardInfo, PlayerAction};
 
 use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
@@ -241,29 +242,6 @@ pub fn patch_signals(value: &impl serde::Serialize) -> DatastarEvent {
             PatchSignals::new("{}").into_datastar_event()
         }
     }
-}
-
-/// JS-escape a string so it's safe to splice between single quotes in a
-/// `<script>`. Backslash and the quote are escaped; newlines are flattened.
-/// Used only by [`alert_events`] for `alert('...')` payloads.
-fn js_escape(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '\\' => "\\\\".into(),
-            '\'' => "\\'".into(),
-            '\n' => "\\n".into(),
-            '\r' => "\\r".into(),
-            _ => c.to_string(),
-        })
-        .collect()
-}
-
-/// Build an `ExecuteScript` event that runs `alert('...')`. Appended to
-/// `<body>` by the SDK with no morph target, so it works before `#game-root`
-/// exists. Returns a `Vec` to match the other render helpers.
-fn alert_events(detail: &str) -> Vec<DatastarEvent> {
-    let js = format!("alert('{}')", js_escape(detail));
-    vec![ExecuteScript::new(js).into_datastar_event()]
 }
 
 // ---------------------------------------------------------------------------
@@ -716,26 +694,26 @@ fn render_controls(ctx: &Ctx, viewer: u32) -> String {
     )
 }
 
-/// Error helper for handlers without a room context (join/create errors).
-/// Surfaces as a browser `alert` via [`datastar::prelude::ExecuteScript`], so
-/// it works with no morph target — including on the connect screen.
+/// Show a transient non-modal message in the always-mounted `#toast` region
+/// (a direct child of `<body>` in `shell.html`, so it's present on the connect
+/// screen too). Driven by the `_toast` local signal: it doesn't steal focus
+/// (unlike a blocking `alert`), self-clears via `animationend`, and is
+/// replaced by the next message. Used by all transient-message helpers below.
+pub fn toast_events(detail: &str) -> Vec<DatastarEvent> {
+    vec![patch_signals(&serde_json::json!({ "_toast": detail }))]
+}
+
+/// Error helper for handlers without a room context (join/create errors, SSE
+/// attach failure). Routes through [`toast_events`], so it works on the
+/// connect screen as well as in-game.
 pub fn error_events_pub(detail: &str) -> Vec<DatastarEvent> {
-    alert_events(&format!("Error: {detail}"))
+    toast_events(&format!("Error: {detail}"))
 }
 
 /// Like [`error_events_pub`] but for non-error notices (e.g. "This game has
 /// ended"), shown without an "Error:" prefix.
 pub fn notice_events(detail: &str) -> Vec<DatastarEvent> {
-    alert_events(detail)
-}
-
-/// Show a transient in-the-table message in the non-modal `#toast` region.
-/// Unlike [`error_events_pub`] (a blocking `alert`), the toast is an in-flow
-/// element driven by the `_toast` local signal — it doesn't steal focus and is
-/// replaced by the next state morph. Used for pre-action rejections that fire
-/// after the player is connected, so the region is mounted.
-pub fn toast_events(detail: &str) -> Vec<DatastarEvent> {
-    vec![patch_signals(&serde_json::json!({ "_toast": detail }))]
+    toast_events(detail)
 }
 
 /// Append a one-shot `<div data-init="@get('/poker/events')">` to `<body>`.
