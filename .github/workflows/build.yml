@@ -16,6 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Update Apt
+        run: sudo apt update
+
+      - name: Install dependencies
+        # libxdo-dev: required to link libxdo (pulled in on Linux by muda -> libxdo -> libxdo-sys)
+        run: sudo apt install libwebkit2gtk-4.1-dev libxdo-dev
+
       - name: Print Rust version
         run: rustc -vV
 

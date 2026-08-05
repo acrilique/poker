@@ -105,7 +105,7 @@ fn make_state(n_players: usize, phase: GamePhase) -> GameState {
             break;
         }
         // Force betting-complete so advance_phase is legal.
-        gs.is_betting_complete();
+        let _ = gs.is_betting_complete();
         let _ = gs.advance_phase();
     }
     gs
