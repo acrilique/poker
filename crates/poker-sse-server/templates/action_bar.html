@@ -17,7 +17,7 @@
     {% endif %}
     {% if valid.raise %}
     <div class="raise-group"
-         data-effect="$raiseamt = pokerToChips($_raiseInput, $bb, $_mode)">
+         data-computed:raiseamt="pokerToChips($_raiseInput, $bb, $_mode)">
       <input type="number" class="raise-input" placeholder="Amount" data-bind:_raise-input>
       <span class="raise-unit">{{ raise_unit }}</span>
       <button class="btn btn-accent" data-on:click="el.classList.add('loading'); @post('/poker/action/raise')">Raise</button>
