@@ -90,6 +90,14 @@ input[type="number"] {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* Transient "in flight" state for CQRS write buttons (action POSTs). Added
+ * imperatively on click (el.classList.add('loading')) and removed when the
+ * next state morph re-renders the element. pointer-events:none blocks repeat
+ * taps in the gap before the per-element request cancellation catches up. */
+.btn.loading {
+  opacity: 0.5;
+  pointer-events: none;
+}
 .btn-block {
   display: block;
   width: 100%;

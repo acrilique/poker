@@ -2,7 +2,7 @@
 <div id="controls" class="lobby-panel">
   <div class="room-chip">Room: <span class="select-all">{{ room_id }}</span></div>
   {% if host.is_host %}
-  <button class="btn btn-primary btn-block" data-on:click="@post('/poker/action/start')">Start Game</button>
+  <button class="btn btn-primary btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/start')">Start Game</button>
   <details class="host-settings">
     <summary>Edit settings</summary>
     <div class="host-inputs">
@@ -21,7 +21,7 @@
         <input type="number" min="0" value="{{ settings.blind_pct }}" data-bind:blindpct>
         <small>Percent</small>
       </label>
-      <button class="btn btn-elevated btn-block" data-on:click="@post('/poker/action/update-settings')">Save settings</button>
+      <button class="btn btn-elevated btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/update-settings')">Save settings</button>
     </div>
   </details>
   {% else %}
@@ -45,15 +45,15 @@
         <input type="number" min="0" value="{{ settings.blind_pct }}" data-bind:blindpct>
         <small>Percent</small>
       </label>
-      <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="@post('/poker/action/toggle-late-entry')">
+      <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="el.classList.add('loading'); @post('/poker/action/toggle-late-entry')">
         Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
       </button>
-      <button class="btn btn-elevated btn-block" data-on:click="@post('/poker/action/update-settings')">Save settings</button>
+      <button class="btn btn-elevated btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/update-settings')">Save settings</button>
     </div>
   </details>
   {% endif %}
   {% if sitting_out %}
-  <button class="btn btn-primary btn-block" data-on:click="@post('/poker/action/sitin')">Sit In</button>
+  <button class="btn btn-primary btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/sitin')">Sit In</button>
   {% endif %}
   <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
 </div>

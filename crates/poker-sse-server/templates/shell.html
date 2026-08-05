@@ -19,7 +19,7 @@
   </head>
   <body
     data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', bb: 0, _toast: '', _mode: pokerLoadMode() || 'bb', _raiseInput: ''}"
-    data-on:datastar-fetch="pokerHandleFetch($sessiontoken, $roomid)"
+    data-on:datastar-fetch="pokerHandleFetch($sessiontoken, $roomid, evt.detail.type, evt.detail.el)"
     data-init="$sessiontoken && @get('/poker/events', {openWhenHidden: true})"
   >
     <div id="toast" class="toast" role="status" aria-live="polite"
@@ -66,8 +66,8 @@
             </details>
           </div>
           <div class="conn-buttons">
-            <button class="btn btn-primary" data-on:click="@post('/poker/room/create'); pokerSaveName($name)">Create Room</button>
-            <button class="btn btn-muted" data-on:click="@post('/poker/room/join'); pokerSaveName($name)">Join Room</button>
+            <button class="btn btn-primary" data-on:click="el.classList.add('loading'); @post('/poker/room/create'); pokerSaveName($name)">Create Room</button>
+            <button class="btn btn-muted" data-on:click="el.classList.add('loading'); @post('/poker/room/join'); pokerSaveName($name)">Join Room</button>
           </div>
         </div>
       </div>

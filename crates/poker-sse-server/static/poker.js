@@ -219,15 +219,33 @@ function pokerToDisplay(chips, bb, mode) {
 }
 
 // ---------------------------------------------------------------------------
-// datastar-fetch lifecycle: persist session
+// datastar-fetch lifecycle: persist session + clear stuck loading state
 // ---------------------------------------------------------------------------
 
-// The live signal values are passed in from the `data-on:datastar-fetch`
-// expression as arguments (`$sessiontoken`, `$roomid`) — they're the
-// authoritative identity, patched by the create/join response. Mirror them
-// into localStorage so a reload can re-open the stream, and clear it when the
-// server blanks them (game-over teardown).
-function pokerHandleFetch(token, room) {
+// `datastar-fetch` fires on the document with `detail.type` (`started`,
+// `finished`, `error`, `retrying`, `retries-failed`) and `detail.el` (the
+// element that issued the request). We use it for two jobs:
+//
+//   1. Persist session identity (the live `$sessiontoken`/`$roomid` are the
+//      authoritative identity, patched by the create/join response; mirror
+//      them into localStorage so a reload re-opens the stream, and clear when
+//      the server blanks them on game-over teardown).
+//   2. Clear the transient `.loading` class action buttons add on click. In
+//      CQRS write POSTs normally self-clear via the next state morph, but a
+//      rejected action (e.g. "Not your turn") or a failed join returns 204 /
+//      an error with no morph, which would otherwise leave the button stuck.
+//      Clearing on terminal events covers both.
+function pokerHandleFetch(token, room, type, el) {
+  // Loading cleanup runs first so it isn't skipped by the `_exiting` guard
+  // (a leave/exit shouldn't leave a button grayed out either).
+  if (
+    el instanceof Element &&
+    el.classList.contains("loading") &&
+    (type === "finished" || type === "error" || type === "retries-failed")
+  ) {
+    el.classList.remove("loading");
+  }
+
   // See _exiting: skip the teardown-time `finished` event so we don't undo
   // pokerClearSession().
   if (_exiting) return;
