@@ -93,15 +93,21 @@ function pokerExit() {
 }
 
 // ---------------------------------------------------------------------------
+// Toast: restart the fade animation on back-to-back messages
+// ---------------------------------------------------------------------------
+function pokerToastShow() {
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.style.animation = "none";
+  // Force a reflow so the cleared animation re-runs when restored below.
+  // `offsetWidth` is the conventional no-op read that flushes layout.
+  void el.offsetWidth;
+  el.style.animation = "";
+}
+
+// ---------------------------------------------------------------------------
 // Live blinds-timer countdown
 // ---------------------------------------------------------------------------
-
-// The server bakes an absolute epoch-ms deadline into #blinds-timer on every
-// #table morph (data-blind-deadline). A single global interval ticks the text
-// down using deadline - Date.now(), so the #table fat-morph — which fires on
-// every action — can't restart the countdown: a re-baked identical deadline
-// just keeps ticking. Reconnects resume in sync automatically because the
-// deadline is absolute, not relative.
 let _blindsTimerStarted = false;
 
 function pokerBlindsTick() {
@@ -249,3 +255,4 @@ window.pokerSaveMode = pokerSaveMode;
 window.pokerFmt = pokerFmt;
 window.pokerToChips = pokerToChips;
 window.pokerToDisplay = pokerToDisplay;
+window.pokerToastShow = pokerToastShow;

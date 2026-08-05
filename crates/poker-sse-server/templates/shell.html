@@ -22,7 +22,9 @@
     data-on:datastar-fetch="pokerHandleFetch($sessiontoken, $roomid)"
     data-init="$sessiontoken && @get('/poker/events', {openWhenHidden: true})"
   >
-    <div id="toast" class="toast" role="status" aria-live="polite" data-show="$_toast" data-on:animationend="$_toast = ''">
+    <div id="toast" class="toast" role="status" aria-live="polite"
+         data-effect="$_toast && pokerToastShow()"
+         data-show="$_toast" data-on:animationend="$_toast = ''">
       <span data-text="$_toast"></span>
     </div>
     <div id="game-root">
