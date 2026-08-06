@@ -1001,9 +1001,16 @@ async fn process_action_with_room(
                 .entry(player_id)
                 .or_insert(0);
             *entry = entry.saturating_add(raise_total);
+            let previous_current_bet = room.game_state.current_bet;
             room.game_state.current_bet = new_bet;
-            room.game_state.min_raise = room.game_state.big_blind;
-            room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
+            // Only reopen betting if the raise constitutes a full legal raise.
+            // A sub-minimum all-in raise (via Raise when raise_total == chips)
+            // should NOT set last_raiser_index, matching the AllIn handler's logic.
+            let raise_increment = new_bet.saturating_sub(previous_current_bet);
+            if raise_increment >= room.game_state.min_raise {
+                room.game_state.min_raise = raise_increment.max(room.game_state.big_blind);
+                room.game_state.last_raiser_index = Some(room.game_state.current_player_index);
+            }
             room.game_state.big_blind_option = false;
         }
         PlayerAction::AllIn => {
