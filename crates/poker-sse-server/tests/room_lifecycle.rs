@@ -535,3 +535,148 @@ async fn list_rooms_reflects_state() {
     assert!(rooms.contains(&"r1".to_string()));
     assert!(rooms.contains(&"r2".to_string()));
 }
+
+// ---------------------------------------------------------------------------
+// Regression: ghost seats from "Exit Game" while paused / at a hand boundary
+// ---------------------------------------------------------------------------
+//
+// Bug: an "Exit Game" that ended a hand and dropped the room below 2 active
+// (→ pause) left a permanent `wants_leave` "(away)" ghost, because the
+// hand-boundary sweep sat *after* the pause early-return and never ran. Each
+// rejoin stacked a fresh seat on top → player list grew without bound.
+
+/// An explicit leave while the game is *paused* (`waiting_for_players`) is
+/// removed immediately, like the lobby path — there is no live betting loop to
+/// defer for, and no `start_new_hand` would ever sweep the seat. Before the
+/// fix this stacked a permanent ghost on every exit-while-paused.
+#[tokio::test]
+async fn leave_while_paused_removes_immediately() {
+    let state = app_state();
+    let players = room_with_players(&state, "pause1", &["a", "b"]).await;
+    let (p1, _g1, _rx1) = attach_with_rx(&state, "pause1", &players[0].1).await;
+    let (p2, _g2, _rx2) = attach_with_rx(&state, "pause1", &players[1].1).await;
+
+    {
+        let room_arc = state.room_manager.get_room("pause1").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+        // Game started but paused (not enough active players to deal).
+        room.game_state.waiting_for_players = true;
+    }
+
+    // p1 exits. With no live hand, this is the lobby path: remove now.
+    let outcome = state.room_manager.leave_room("pause1", p1).await;
+    assert_eq!(
+        outcome,
+        LeaveOutcome::Left,
+        "a leave while paused (no live hand) should remove immediately, not defer"
+    );
+
+    let room_arc = state.room_manager.get_room("pause1").await.unwrap();
+    let room = room_arc.lock().await;
+    assert!(
+        !room.players.contains_key(&p1),
+        "p1 must be fully removed, not a lingering ghost"
+    );
+    assert!(
+        !room.game_state.players.contains_key(&p1),
+        "p1 must be gone from game state too"
+    );
+    assert!(room.players.contains_key(&p2));
+}
+
+/// The hand-boundary sweep runs *before* the pause decision, so a mid-hand
+/// leave that ends the hand and drops the room to < 2 active still reclaims
+/// the seat at the boundary (→ pause, but a clean one). This is the path the
+/// unbounded-ghost bug went through.
+#[tokio::test]
+async fn boundary_sweep_reclaims_leaver_even_when_result_is_pause() {
+    let state = app_state();
+    let players = room_with_players(&state, "sweep1", &["a", "b"]).await;
+    let (p1, _g1, _rx1) = attach_with_rx(&state, "sweep1", &players[0].1).await;
+    let (p2, _g2, _rx2) = attach_with_rx(&state, "sweep1", &players[1].1).await;
+
+    {
+        let room_arc = state.room_manager.get_room("sweep1").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+        // p1 left mid-hand: sat out and flagged for boundary removal.
+        room.game_state.set_sitting_out(p1);
+        room.players.get_mut(&p1).unwrap().wants_leave = true;
+    }
+
+    // The hand boundary fires. Even though only p2 is active (→ pause), the
+    // sweep must run first and reclaim p1's seat.
+    let room_arc = state.room_manager.get_room("sweep1").await.unwrap();
+    {
+        let mut room = room_arc.lock().await;
+        assert!(
+            poker_sse_server::handlers::sweep_leavers(&mut room, "sweep1"),
+            "the sweep should reclaim the flagged leaver"
+        );
+    }
+
+    let room = room_arc.lock().await;
+    assert!(
+        !room.players.contains_key(&p1),
+        "p1 must be swept at the boundary, not left as a ghost"
+    );
+    assert!(
+        room.game_state.waiting_for_players || room.players.contains_key(&p2),
+        "p2 survives; the room is paused or waiting with the remaining player"
+    );
+    assert!(room.players.contains_key(&p2));
+}
+
+/// The full end-to-end reproduction: exit → rejoin must not stack a duplicate
+/// seat. After the fix, the exit is cleaned up (here via the paused-game
+/// immediate path) so the rejoin is the only seat — the player list stays at
+/// two, not three.
+#[tokio::test]
+async fn exit_then_rejoin_does_not_stack_seat() {
+    let state = app_state();
+    let players = room_with_players(&state, "stack1", &["host", "p2"]).await;
+    let (host, _gh, _rxh) = attach_with_rx(&state, "stack1", &players[0].1).await;
+    let (p2, _g2, _rx2) = attach_with_rx(&state, "stack1", &players[1].1).await;
+
+    {
+        let room_arc = state.room_manager.get_room("stack1").await.unwrap();
+        let mut room = room_arc.lock().await;
+        room.game_state.game_started = true;
+        room.game_state.allow_late_entry = true;
+        room.game_state.waiting_for_players = true; // paused
+    }
+
+    // p2 exits to the connection screen, then rejoins via late entry.
+    state.room_manager.leave_room("stack1", p2).await;
+    let (p2b, _token_b, _) = state
+        .room_manager
+        .join_room("stack1", "p2")
+        .await
+        .expect("rejoin should succeed (late entry is on)");
+
+    let room_arc = state.room_manager.get_room("stack1").await.unwrap();
+    let room = room_arc.lock().await;
+    assert!(
+        !room.players.contains_key(&p2),
+        "the original p2 seat must be gone, not lingering as a ghost"
+    );
+    assert!(
+        room.players.contains_key(&p2b),
+        "the rejoined p2 seat exists"
+    );
+    assert!(
+        room.players.contains_key(&host),
+        "the host is unaffected"
+    );
+    assert_eq!(
+        room.players.len(),
+        2,
+        "exactly two seats after rejoin — no stacked ghost (the bug grew this to 3+)"
+    );
+    assert_eq!(
+        room.game_state.player_count(),
+        2,
+        "game-state seat count must also stay at 2"
+    );
+}
