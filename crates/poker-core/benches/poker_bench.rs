@@ -1,5 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use poker_core::poker::{Card, Board, CardNumber, CardSuit, Hand, FullHand, get_all_cards, get_all_numbers, calculate_equity, calculate_equity_multi};
+use poker_core::poker::{
+    Board, Card, CardNumber, CardSuit, FullHand, Hand, calculate_equity, calculate_equity_multi,
+    get_all_cards, get_all_numbers,
+};
 use std::hint::black_box;
 
 // ---------------------------------------------------------------------------

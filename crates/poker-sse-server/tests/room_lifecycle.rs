@@ -665,10 +665,7 @@ async fn exit_then_rejoin_does_not_stack_seat() {
         room.players.contains_key(&p2b),
         "the rejoined p2 seat exists"
     );
-    assert!(
-        room.players.contains_key(&host),
-        "the host is unaffected"
-    );
+    assert!(room.players.contains_key(&host), "the host is unaffected");
     assert_eq!(
         room.players.len(),
         2,

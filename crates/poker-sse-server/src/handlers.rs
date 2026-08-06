@@ -124,7 +124,10 @@ pub async fn shell() -> impl IntoResponse {
         form-action 'self'; \
         frame-ancestors 'none'";
     (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CONTENT_SECURITY_POLICY, CSP)],
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CONTENT_SECURITY_POLICY, CSP),
+        ],
         ShellTpl.render().unwrap_or_default(),
     )
 }
@@ -1180,9 +1183,7 @@ async fn maybe_start_new_hand(
         // Sweep first — before the active-count / pause decision — so a leave
         // that drops the room below 2 active (→ pause) is still cleaned up. If
         // the sweep emptied the room, let the last stream's Drop tear it down.
-        if sweep_leavers(&mut room, room_id)
-            && !room.players.values().any(|c| c.tx.is_some())
-        {
+        if sweep_leavers(&mut room, room_id) && !room.players.values().any(|c| c.tx.is_some()) {
             return None;
         }
 
