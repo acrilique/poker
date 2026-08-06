@@ -1096,6 +1096,31 @@ async fn process_action_with_room(
     }
 }
 
+/// Hand-boundary sweep: hard-remove every player flagged `wants_leave` from an
+/// explicit mid-hand "Exit Game" ([`RoomManager::leave_room`]). This is the
+/// only index-safe removal point — callers invoke it between hands, where the
+/// next `start_new_hand` recomputes every positional index (dealer / blinds /
+/// current actor) from the surviving `player_order`, so removing entries here
+/// can't desync the betting loop the way a mid-hand `remove_player` would.
+/// Broadcasts once after the whole batch. Returns whether any player was
+/// removed, so the caller can re-check the active count / tear the room down.
+pub fn sweep_leavers(room: &mut Room, room_id: &str) -> bool {
+    let leavers: Vec<u32> = room
+        .players
+        .iter()
+        .filter(|(_, c)| c.wants_leave)
+        .map(|(id, _)| *id)
+        .collect();
+    if leavers.is_empty() {
+        return false;
+    }
+    for pid in &leavers {
+        remove_player_now(room, room_id, *pid);
+    }
+    broadcast_state(room, room_id);
+    true
+}
+
 /// If ≥ 2 active players remain, start the next hand after a short delay.
 /// Otherwise pause and wait for players to sit back in.
 ///
@@ -1109,6 +1134,15 @@ async fn maybe_start_new_hand(
     let should_start = {
         let mut room = room_arc.lock().await;
         if !room.game_state.game_started {
+            return None;
+        }
+
+        // Sweep first — before the active-count / pause decision — so a leave
+        // that drops the room below 2 active (→ pause) is still cleaned up. If
+        // the sweep emptied the room, let the last stream's Drop tear it down.
+        if sweep_leavers(&mut room, room_id)
+            && !room.players.values().any(|c| c.tx.is_some())
+        {
             return None;
         }
 
@@ -1167,54 +1201,6 @@ async fn maybe_start_new_hand(
         return None;
     }
 
-    // Hand-boundary sweep: hard-remove any player who explicitly left
-    // ([`RoomManager::leave_room`]) during the previous hand. This is the one
-    // index-safe point — `start_new_hand` recomputes every positional index
-    // (dealer / blinds / current actor) from the surviving `player_order`
-    // immediately after, so removing entries here can't desync the betting
-    // loop the way a mid-hand `remove_player` would.
-    let leavers: Vec<u32> = room
-        .players
-        .iter()
-        .filter(|(_, c)| c.wants_leave)
-        .map(|(id, _)| *id)
-        .collect();
-    let mut any_removed = false;
-    for pid in &leavers {
-        remove_player_now(&mut room, room_id, *pid);
-        any_removed = true;
-    }
-    if any_removed {
-        broadcast_state(&mut room, room_id);
-        // If the sweep emptied the room, tear it down (no one left to play).
-        let any_connected = room.players.values().any(|c| c.tx.is_some());
-        if !any_connected {
-            drop(room);
-            // Best-effort: the outer RoomManager owns the map, but this helper
-            // only has the room Arc. The room will be reclaimed when the last
-            // stream's Drop runs `disconnect_player` → `remove_room_if_empty`.
-            return None;
-        }
-        // After removal, re-check whether enough active players remain.
-        let active_after = room
-            .game_state
-            .player_order
-            .iter()
-            .filter(|id| {
-                room.game_state
-                    .players
-                    .get(id)
-                    .is_some_and(|p| !p.sitting_out && p.chips > 0)
-            })
-            .count();
-        if active_after < 2 {
-            room.game_state.waiting_for_players = true;
-            broadcast_state(&mut room, room_id);
-            return None;
-        }
-    }
-
-    // notify_turn_and_start_timer renders state from this settled snapshot.
     let _hand_msgs = room.game_state.start_new_hand();
     notify_turn_and_start_timer(&mut room, room_arc, room_id)
 }
