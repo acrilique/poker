@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 use askama::Template;
 use axum::extract::State;
 use axum::http::header;
-use axum::response::{Html, IntoResponse, Sse};
+use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
 use futures_util::{Stream, StreamExt};
 use poker_core::poker::Hand;
@@ -89,11 +89,44 @@ fn value_as_f64(v: &serde_json::Value) -> f64 {
 #[template(path = "shell.html")]
 struct ShellTpl;
 
-// `async` keeps this shaped like the other axum handlers; the body has no
-// await point today, which trips `unused_async`. Kept async deliberately.
+/// `GET /poker` — the shell page.
+///
+/// Sets a strict Content-Security-Policy. Rationale for each directive:
+/// - `script-src 'self' 'unsafe-eval'` — `'self'` for datastar.js / poker.js /
+///   sw-register.js; `'unsafe-eval'` is mandatory because Datastar evaluates
+///   expressions via a `Function()` constructor (see the Datastar Security
+///   docs). Deliberately *no* `'unsafe-inline'`: blocks `<script>`/`onerror=`
+///   reflected+stored XSS, at the cost of externalizing the SW-registration
+///   snippet into `static/sw-register.js`.
+/// - `style-src 'self' 'unsafe-inline'` — templates inject inline `style=`
+///   (the per-turn `--timer-duration` on the active player row), so inline
+///   styles are required; style injection is low-risk.
+/// - `connect-src 'self'` — every SSE stream, action POST, and the
+///   `sendBeacon` leave are same-origin; blocks future exfiltration.
+/// - the rest (`object-src 'none'`, `base-uri`, `form-action`,
+///   `frame-ancestors 'none'`) is standard hardening; `frame-ancestors` also
+///   gives clickjacking protection.
+///
+/// Applied here rather than in nginx so it covers poker-desktop's LAN host
+/// mode too (which has no nginx in the path); nginx proxies the header
+/// through unchanged for the public deployment.
 #[allow(clippy::unused_async)]
-pub async fn shell() -> Html<String> {
-    Html(ShellTpl.render().unwrap_or_default())
+pub async fn shell() -> impl IntoResponse {
+    const CSP: &str = "default-src 'self'; \
+        script-src 'self' 'unsafe-eval'; \
+        style-src 'self' 'unsafe-inline'; \
+        img-src 'self' data:; \
+        font-src 'self'; \
+        connect-src 'self'; \
+        manifest-src 'self'; \
+        object-src 'none'; \
+        base-uri 'self'; \
+        form-action 'self'; \
+        frame-ancestors 'none'";
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CONTENT_SECURITY_POLICY, CSP)],
+        ShellTpl.render().unwrap_or_default(),
+    )
 }
 
 /// `GET /poker/manifest.json` — the PWA web app manifest. Served at the app

@@ -11,11 +11,7 @@
     <link rel="stylesheet" href="/poker/static/poker.css">
     <script src="/poker/static/poker.js"></script>
     <script type="module" src="/poker/static/datastar.js"></script>
-    <script>
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/poker/sw.js", { scope: "/poker/" });
-      }
-    </script>
+    <script src="/poker/static/sw-register.js"></script>
   </head>
   <body
     data-signals="{roomid: pokerLoadRoom() || '', sessiontoken: pokerLoadToken() || '', name: pokerLoadName() || '', blindmins: '', blindpct: '', stackbbs: '100', raiseamt: '', bb: 0, _toast: '', _mode: pokerLoadMode() || 'bb', _raiseInput: ''}"
