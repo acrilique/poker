@@ -133,7 +133,6 @@ pub fn build_router(config: &ServerConfig) -> Router {
         .route("/poker/", get(handlers::shell))
         .route("/poker/manifest.json", get(handlers::manifest))
         .route("/poker/sw.js", get(handlers::service_worker))
-        .route("/poker/api/rooms", get(rooms_handler))
         .nest_service("/poker/static", ServeDir::new(&config.static_dir))
         .route("/poker/events", get(handlers::events))
         .route("/poker/room/create", post(handlers::room_create))
@@ -176,9 +175,4 @@ pub async fn run(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>>
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-/// `GET /poker/api/rooms` — return a JSON array of active room IDs.
-async fn rooms_handler(State(state): State<AppState>) -> Json<Vec<String>> {
-    Json(state.room_manager.list_rooms().await)
 }
