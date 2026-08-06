@@ -1285,6 +1285,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
         .collect()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1296,7 +1297,7 @@ mod tests {
 
     fn make_board(flop: Option<[Card; 3]>, turn: Option<Card>, river: Option<Card>) -> Board {
         Board {
-            flop: flop.map(|[a, b, c]| (a, b, c)),
+            flop: flop.map(|f| (f[0], f[1], f[2])),
             turn,
             river,
         }
@@ -1305,13 +1306,13 @@ mod tests {
     #[test]
     fn test_card_display() {
         let card = c(CardNumber::Ace, CardSuit::Spades);
-        assert_eq!(format!("{}", card), "A♠");
+        assert_eq!(format!("{card}"), "A♠");
 
         let card = c(CardNumber::Ten, CardSuit::Hearts);
-        assert_eq!(format!("{}", card), "T♥");
+        assert_eq!(format!("{card}"), "T♥");
 
         let card = c(CardNumber::Two, CardSuit::Diamonds);
-        assert_eq!(format!("{}", card), "2♦");
+        assert_eq!(format!("{card}"), "2♦");
     }
 
     #[test]
@@ -1630,13 +1631,13 @@ mod tests {
         // Check we have 4 of each rank
         for number in get_all_numbers() {
             let count = cards.iter().filter(|c| c.number() == number).count();
-            assert_eq!(count, 4, "Should have 4 cards of {:?}", number);
+            assert_eq!(count, 4, "Should have 4 cards of {number:?}");
         }
 
         // Check we have 13 of each suit
         for suit in CardSuit::ALL {
             let count = cards.iter().filter(|c| c.suit() == suit).count();
-            assert_eq!(count, 13, "Should have 13 cards of {:?}", suit);
+            assert_eq!(count, 13, "Should have 13 cards of {suit:?}");
         }
     }
 

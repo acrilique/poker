@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use poker_core::poker::*;
+use poker_core::poker::{Card, Board, CardNumber, CardSuit, Hand, FullHand, get_all_cards, get_all_numbers, calculate_equity, calculate_equity_multi};
 use std::hint::black_box;
 
 // ---------------------------------------------------------------------------
@@ -8,13 +8,13 @@ use std::hint::black_box;
 
 fn make_board(flop: Option<[Card; 3]>, turn: Option<Card>, river: Option<Card>) -> Board {
     Board {
-        flop: flop.map(|[a, b, c]| (a, b, c)),
+        flop: flop.map(|f| (f[0], f[1], f[2])),
         turn,
         river,
     }
 }
 
-fn c(rank: CardNumber, suit: CardSuit) -> Card {
+const fn c(rank: CardNumber, suit: CardSuit) -> Card {
     Card(rank, suit)
 }
 
@@ -40,7 +40,7 @@ fn bench_hand_best(crit: &mut Criterion) {
     );
 
     crit.bench_function("hand_best_flush", |b| {
-        b.iter(|| black_box(hand.best(black_box(&board))))
+        b.iter(|| black_box(hand.best(black_box(&board))));
     });
 }
 
@@ -61,7 +61,7 @@ fn bench_hand_best_high_card(crit: &mut Criterion) {
     );
 
     crit.bench_function("hand_best_high_card", |b| {
-        b.iter(|| black_box(hand.best(black_box(&board))))
+        b.iter(|| black_box(hand.best(black_box(&board))));
     });
 }
 
@@ -76,7 +76,7 @@ fn bench_full_hand_rank(crit: &mut Criterion) {
     );
 
     crit.bench_function("full_hand_rank", |b| {
-        b.iter(|| black_box(black_box(&fh).rank()))
+        b.iter(|| black_box(black_box(&fh).rank()));
     });
 }
 
@@ -98,7 +98,7 @@ fn bench_full_hand_compare(crit: &mut Criterion) {
     );
 
     crit.bench_function("full_hand_compare", |b| {
-        b.iter(|| black_box(black_box(&h1).compare(black_box(&h2))))
+        b.iter(|| black_box(black_box(&h1).compare(black_box(&h2))));
     });
 }
 
@@ -110,7 +110,7 @@ fn bench_get_all_cards(crit: &mut Criterion) {
 /// Benchmark `get_all_numbers` (allocation cost).
 fn bench_get_all_numbers(crit: &mut Criterion) {
     crit.bench_function("get_all_numbers", |b| {
-        b.iter(|| black_box(get_all_numbers()))
+        b.iter(|| black_box(get_all_numbers()));
     });
 }
 
@@ -127,7 +127,7 @@ fn bench_equity_1k(crit: &mut Criterion) {
     };
 
     crit.bench_function("equity_1k_preflop", |b| {
-        b.iter(|| black_box(calculate_equity(black_box(&hero), black_box(&board), 1_000)))
+        b.iter(|| black_box(calculate_equity(black_box(&hero), black_box(&board), 1_000)));
     });
 }
 
@@ -156,7 +156,7 @@ fn bench_equity_multi_2p_1k(crit: &mut Criterion) {
                 black_box(&board),
                 1_000,
             ))
-        })
+        });
     });
 }
 
@@ -193,7 +193,7 @@ fn bench_equity_multi_4p_1k(crit: &mut Criterion) {
                 black_box(&board),
                 1_000,
             ))
-        })
+        });
     });
 }
 

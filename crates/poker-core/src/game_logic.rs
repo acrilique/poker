@@ -1807,7 +1807,7 @@ mod tests {
         );
         // Alice (royal flush) wins the 200 pot.
         assert_eq!(gs.last_winners.len(), 1);
-        let (wid, amount, _rank) = gs.last_winners.get(0).expect("winner recorded");
+        let (wid, amount, _rank) = gs.last_winners.first().expect("winner recorded");
         assert_eq!(*wid, 1);
         assert_eq!(*amount, 200);
     }

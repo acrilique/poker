@@ -39,9 +39,8 @@ pub mod room;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Router;
 use room::RoomManager;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
