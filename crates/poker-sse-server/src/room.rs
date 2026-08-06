@@ -567,8 +567,9 @@ impl RoomManager {
             return LeaveOutcome::AlreadyLeft;
         }
 
-        let in_hand =
-            room.game_state.game_started && room.game_state.players.contains_key(&player_id);
+        let in_hand = room.game_state.game_started
+            && !room.game_state.waiting_for_players
+            && room.game_state.players.contains_key(&player_id);
 
         if !in_hand {
             // Lobby / pre-game: remove now and tear the room down if empty.
