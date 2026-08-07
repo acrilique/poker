@@ -1,7 +1,3 @@
-// Build scripts are build-time tooling, not shipped server logic, so the
-// crate's strict clippy set (pedantic/nursery/deny-on-panics) doesn't apply.
-#![allow(clippy::all)]
-
 //! Emits `POKER_CACHE_VERSION`, used to stamp the service worker's
 //! `CACHE_VERSION` so each deploy invalidates old caches without a manual bump.
 //!
