@@ -392,7 +392,7 @@ input[type="number"] {
 @property --timer-angle {
   syntax: "<angle>";
   initial-value: 360deg;
-  inherits: false;
+  inherits: true;
 }
 
 .timer-border {
@@ -416,16 +416,7 @@ input[type="number"] {
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
   padding: 2px;
-  animation: timer-sweep var(--timer-duration, 30s) linear forwards;
   pointer-events: none;
-}
-@keyframes timer-sweep {
-  from {
-    --timer-angle: 360deg;
-  }
-  to {
-    --timer-angle: 0deg;
-  }
 }
 
 /* ---------------------------------------------------------------------------

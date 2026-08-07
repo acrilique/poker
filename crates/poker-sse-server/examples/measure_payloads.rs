@@ -239,39 +239,49 @@ fn main() {
     // Render each via state_events (the full fat-morph path), viewer = first seat.
     let viewer_of = |gs: &GameState| gs.player_order.first().copied().unwrap_or(1);
 
+    // A deadline 30s out, matching a fresh turn at TURN_TIMEOUT_SECS.
+    let turn_deadline = {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        Some((now + 30_000).to_string())
+    };
+
     let samples = vec![
         Sample {
             name: "lobby (6 players)",
             events: {
-                let ctx = Ctx::new(&lobby, "ROOM42", 30);
+                // No active turn in the lobby.
+                let ctx = Ctx::new(&lobby, "ROOM42", None);
                 render::state_events(&ctx, viewer_of(&lobby))
             },
         },
         Sample {
             name: "preflop (6 players)",
             events: {
-                let ctx = Ctx::new(&preflop, "ROOM42", 30);
+                let ctx = Ctx::new(&preflop, "ROOM42", turn_deadline.clone());
                 render::state_events(&ctx, viewer_of(&preflop))
             },
         },
         Sample {
             name: "flop (6 players)",
             events: {
-                let ctx = Ctx::new(&flop, "ROOM42", 30);
+                let ctx = Ctx::new(&flop, "ROOM42", turn_deadline.clone());
                 render::state_events(&ctx, viewer_of(&flop))
             },
         },
         Sample {
             name: "river+pot (4 players)",
             events: {
-                let ctx = Ctx::new(&river, "ROOM42", 30);
+                let ctx = Ctx::new(&river, "ROOM42", turn_deadline.clone());
                 render::state_events(&ctx, viewer_of(&river))
             },
         },
         Sample {
             name: "all-in showdown (3)",
             events: {
-                let ctx = Ctx::new(&show, "ROOM42", 30);
+                let ctx = Ctx::new(&show, "ROOM42", turn_deadline);
                 render::state_events(&ctx, viewer_of(&show))
             },
         },

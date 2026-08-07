@@ -85,7 +85,7 @@ pub struct PlayerEntry {
     pub blind: Blind,
     pub status: SeatStatus,
     pub is_turn: bool,
-    pub timer_style: String,
+    pub turn_deadline_ms: String,
 }
 
 #[derive(Clone)]
@@ -263,21 +263,20 @@ fn render_or_log<T: Template>(tpl: T, region: &'static str) -> String {
 pub struct Ctx<'a> {
     pub gs: &'a GameState,
     pub room_id: &'a str,
-    /// Seconds left on the current turn timer. Drives the CSS
-    /// `--timer-duration` on the active player's row, so a reconnecting client
-    /// resumes in sync instead of restarting.
-    pub turn_remaining: u32,
+    /// Absolute epoch-ms deadline for the current turn (`None` when no turn is
+    /// active). Drives `data-turn-deadline` on the active player's row.
+    pub turn_deadline_ms: Option<String>,
     /// Live blinds-timer view for the table header. `None` when rising blinds
     /// aren't configured or the game hasn't started.
     pub blinds_timer: Option<BlindsTimerView>,
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(gs: &'a GameState, room_id: &'a str, turn_remaining: u32) -> Self {
+    pub fn new(gs: &'a GameState, room_id: &'a str, turn_deadline_ms: Option<String>) -> Self {
         Self {
             gs,
             room_id,
-            turn_remaining,
+            turn_deadline_ms,
             blinds_timer: build_blinds_timer(gs),
         }
     }
@@ -373,8 +372,8 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
                 blind,
                 status,
                 is_turn,
-                timer_style: if is_turn {
-                    format!("--timer-duration: {}s", ctx.turn_remaining)
+                turn_deadline_ms: if is_turn {
+                    ctx.turn_deadline_ms.clone().unwrap_or_default()
                 } else {
                     String::new()
                 },
@@ -805,9 +804,10 @@ pub fn state_events(ctx: &Ctx, viewer: u32) -> Vec<DatastarEvent> {
         patch_signals(&serde_json::json!({ "bb": ctx.gs.big_blind })),
     ];
 
-    // The countdown ring is driven entirely by the `--timer-duration` CSS
-    // custom property on the active player's row above, which the morph
-    // reapplies.
+    // The countdown ring is driven by `data-turn-deadline` on the active
+    // player's row above, ticked client-side by `pokerTurnTick` (see
+    // static/poker.js). The morph re-bakes the same absolute deadline, so a
+    // reconnect mid-turn resumes at the correct fraction.
 
     events
 }

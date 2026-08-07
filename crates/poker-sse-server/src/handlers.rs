@@ -98,9 +98,9 @@ struct ShellTpl;
 ///   docs). Deliberately *no* `'unsafe-inline'`: blocks `<script>`/`onerror=`
 ///   reflected+stored XSS, at the cost of externalizing the SW-registration
 ///   snippet into `static/sw-register.js`.
-/// - `style-src 'self' 'unsafe-inline'` — templates inject inline `style=`
-///   (the per-turn `--timer-duration` on the active player row), so inline
-///   styles are required; style injection is low-risk.
+/// - `style-src 'self' 'unsafe-inline'` — kept permissive for future inline
+///   styles; the turn-timer ring is now driven by a JS-set custom property on
+///   a class rather than an inline `style=`. Style injection is low-risk.
 /// - `connect-src 'self'` — every SSE stream, action POST, and the
 ///   `sendBeacon` leave are same-origin; blocks future exfiltration.
 /// - the rest (`object-src 'none'`, `base-uri`, `form-action`,
@@ -784,13 +784,24 @@ async fn render_full_snapshot(
 }
 
 pub fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
-    let turn_remaining = room
-        .turn_started_at
-        .map_or(TURN_TIMEOUT_SECS, |t| {
-            u64_to_u32(u64::from(TURN_TIMEOUT_SECS).saturating_sub(t.elapsed().as_secs()))
-        })
-        .max(1);
-    Ctx::new(&room.game_state, room_id, turn_remaining)
+    // Absolute epoch-ms deadline for the current turn. Unlike a remaining-seconds
+    // value, a deadline is stable across renders: a reconnect at T=10 of a 30s
+    // turn gets the same deadline as the original render at T=0, so the
+    // client-side ring (driven by `deadline - Date.now()`) resumes at the right
+    // fraction instead of restarting from full. Computed with sub-second
+    // precision so the ring doesn't read up to ~1s too long after a reconnect.
+    let turn_deadline_ms = room.turn_started_at.map(|t| {
+        let elapsed_ms = t.elapsed().as_millis();
+        let remaining_ms = u128::from(TURN_TIMEOUT_SECS)
+            .saturating_mul(1000)
+            .saturating_sub(elapsed_ms);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        now.saturating_add(remaining_ms).to_string()
+    });
+    Ctx::new(&room.game_state, room_id, turn_deadline_ms)
 }
 
 /// Render the full settled state for every connected player (a fat-morph of
@@ -1361,8 +1372,8 @@ fn notify_turn_and_start_timer(
     }
 
     // Terminal point for a real turn: the active action bar (per-viewer) and
-    // the countdown ring (--timer-duration on the active player's row) are both
-    // produced by state_events here.
+    // the countdown ring (data-turn-deadline on the active player's row, ticked
+    // client-side by pokerTurnTick) are both produced by state_events here.
     broadcast_state(room, room_id);
 
     // Spawn a task to force an action after the timeout.

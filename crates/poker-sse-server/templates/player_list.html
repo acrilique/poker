@@ -1,7 +1,7 @@
 <div id="player-list" class="player-list">
 {% for p in players %}
 <div class="player-row {% if p.is_us %}player-us{% endif %} {% if p.is_turn %}timer-border{% endif %} {% if p.status == SeatStatus::Folded || p.status == SeatStatus::Out %}player-dim{% endif %}"
-     {% if p.is_turn %}style="{{ p.timer_style }}"{% endif %}>
+     {% if p.is_turn %}data-turn-deadline="{{ p.turn_deadline_ms }}"{% endif %}>
   <div class="player-left">
     {% if p.blind == Blind::Small %}<span class="blind-chip blind-sb">SB</span>{% endif %}
     {% if p.blind == Blind::Big %}<span class="blind-chip blind-bb">BB</span>{% endif %}

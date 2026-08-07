@@ -106,9 +106,12 @@ function pokerToastShow() {
 }
 
 // ---------------------------------------------------------------------------
-// Live blinds-timer countdown
+// Live countdowns (blinds timer + turn-timer ring)
 // ---------------------------------------------------------------------------
-let _blindsTimerStarted = false;
+let _countdownStarted = false;
+
+// Must match TURN_TIMEOUT_SECS in poker-core/src/game_logic.rs.
+const POKER_TURN_TOTAL_SECS = 30;
 
 function pokerBlindsTick() {
   const el = document.getElementById("blinds-timer");
@@ -140,20 +143,47 @@ function pokerBlindsTick() {
   }
 }
 
-// Start the interval once per tab. Guarded so repeated inits (e.g. a reconnect
-// morph) can't stack intervals.
-function pokerBlindsTickStart() {
-  if (_blindsTimerStarted) return;
-  _blindsTimerStarted = true;
-  // 250ms is smooth for a seconds-precision display and cheap on idle.
-  setInterval(pokerBlindsTick, 250);
+// Drive the active-turn player's countdown ring.
+function pokerTurnTick() {
+  const el = document.querySelector(".timer-border[data-turn-deadline]");
+  if (!el) return;
+  const raw = el.getAttribute("data-turn-deadline") || "";
+  if (!raw) {
+    el.style.setProperty("--timer-angle", "360deg");
+    return;
+  }
+  const deadline = parseInt(raw, 10);
+  if (!Number.isFinite(deadline)) {
+    el.style.setProperty("--timer-angle", "360deg");
+    return;
+  }
+  const totalMs = POKER_TURN_TOTAL_SECS * 1000;
+  const remainingMs = Math.max(0, deadline - Date.now());
+  // remaining/total → angle (full ring at the start, empty at the deadline).
+  const frac = totalMs > 0 ? remainingMs / totalMs : 0;
+  const deg = Math.round(360 * frac);
+  el.style.setProperty("--timer-angle", deg + "deg");
+}
+
+function pokerCountdownTick() {
   pokerBlindsTick();
+  pokerTurnTick();
+}
+
+// Start the shared interval once per tab. Guarded so repeated inits (e.g. a
+// reconnect morph) can't stack intervals.
+function pokerCountdownStart() {
+  if (_countdownStarted) return;
+  _countdownStarted = true;
+  // 250ms is smooth for a seconds-precision display and cheap on idle.
+  setInterval(pokerCountdownTick, 250);
+  pokerCountdownTick();
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", pokerBlindsTickStart);
+  document.addEventListener("DOMContentLoaded", pokerCountdownStart);
 } else {
-  pokerBlindsTickStart();
+  pokerCountdownStart();
 }
 
 // ---------------------------------------------------------------------------
