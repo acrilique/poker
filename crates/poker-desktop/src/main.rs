@@ -31,13 +31,6 @@
 //! Menu clicks arrive via [`muda`] as a [`MenuEvent`], which we forward to the
 //! event loop through an [`EventLoopProxy`]; the loop then acts on the webview.
 
-// GUI bootstrap (`Runtime::new`, `WindowBuilder::build`, `WebViewBuilder::build`,
-// muda menu attachment) fails only in unrecoverable situations — no display,
-// no webview backend, broken GTK init. There is no meaningful recovery path
-// for a desktop app that cannot open a window, so `expect`/`panic` at startup
-// are allowed here. Runtime code (command handling) still must never panic.
-#![allow(clippy::expect_used, clippy::panic)]
-
 pub(crate) mod config;
 pub(crate) mod server;
 
@@ -86,6 +79,11 @@ enum Command {
     Quit,
 }
 
+// All panic sites below (`Runtime::new`, `WindowBuilder::build`, webview
+// build, GTK vbox) are unrecoverable startup failures: no display, no webview
+// backend, or broken GTK init. A desktop app that can't open a window has no
+// meaningful recovery path.
+#[allow(clippy::expect_used, clippy::panic)]
 fn main() {
     // Initialise tracing (respects RUST_LOG env var).
     tracing_subscriber::fmt()
@@ -233,7 +231,7 @@ fn main() {
 /// API, so we go through muda's platform-specific initialisers. Returns the
 /// menu so the caller can keep it alive (`std::mem::forget`) — muda holds only
 /// weak refs internally.
-#[allow(clippy::needless_pass_by_value)] // consumes `menu` by design
+#[allow(clippy::needless_pass_by_value, clippy::expect_used)] // consumes `menu` by design; attachment is unrecoverable startup setup
 fn attach_menu(menu: Menu, window: &tao::window::Window) -> Menu {
     #[cfg(target_os = "linux")]
     {
@@ -336,6 +334,10 @@ impl AppState {
 /// Build the native menu bar. `hosting` sets the initial enabled state of the
 /// mode-dependent items. Returns the [`Menu`] plus retained [`MenuItem`]
 /// handles the caller needs to toggle those items at runtime.
+///
+/// `expect` is permitted here: menu construction happens once at startup, and a
+/// failure (muda misuse) has no recovery path before the window appears.
+#[allow(clippy::expect_used)]
 fn build_menu(hosting: bool) -> (Menu, MenuControls) {
     let poker_menu = Submenu::new("Poker", true);
     poker_menu

@@ -616,7 +616,6 @@ impl RoomManager {
     /// readable. Callers pick the window: [`SESSION_GRACE_PERIOD`] while
     /// others keep the game going, [`LAST_PLAYER_GRACE_PERIOD`] when this was
     /// the last connected player.
-    #[allow(clippy::too_many_lines)]
     async fn start_grace_period(
         &self,
         mut room: tokio::sync::MutexGuard<'_, Room>,
