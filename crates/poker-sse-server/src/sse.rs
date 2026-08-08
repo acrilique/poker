@@ -98,9 +98,12 @@ pub async fn events(
     let caller = match resolve_caller(&manager, &room_id, &token).await {
         Ok(c) => c,
         Err(e) => {
-            let err = render::error_events_pub(&e);
+            let mut evs = render::error_events_pub(&e);
+            evs.push(render::patch_signals(
+                &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
+            ));
             let stream = futures_util::stream::iter(
-                err.into_iter()
+                evs.into_iter()
                     .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
             );
             return Sse::new(stream).into_response();
