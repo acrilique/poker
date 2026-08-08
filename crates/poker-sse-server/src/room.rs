@@ -27,7 +27,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use datastar::DatastarEvent;
-use poker_core::protocol::{BlindConfig, RoomErrorKind, RoomIdError, validate_room_id};
+use poker_core::protocol::{BlindConfig, RoomIdError, validate_room_id};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
@@ -94,29 +94,6 @@ pub enum RoomError {
     /// The player's session was valid but the player was already removed.
     #[error("Session expired — player was removed")]
     SessionExpired,
-}
-
-impl From<&RoomError> for RoomErrorKind {
-    fn from(err: &RoomError) -> Self {
-        match err {
-            RoomError::InvalidRoomId(e) => match e {
-                RoomIdError::Empty => Self::RoomIdEmpty,
-                RoomIdError::TooLong => Self::RoomIdTooLong,
-                RoomIdError::InvalidChars => Self::RoomIdInvalidChars,
-            },
-            RoomError::ServerFull => Self::ServerFull,
-            RoomError::RoomAlreadyExists(id) => Self::RoomAlreadyExists {
-                room_id: id.clone(),
-            },
-            RoomError::RoomNotFound(id) => Self::RoomNotFound {
-                room_id: id.clone(),
-            },
-            RoomError::RoomFull => Self::RoomFull,
-            RoomError::GameInProgress => Self::GameInProgress,
-            RoomError::InvalidSession => Self::InvalidSession,
-            RoomError::SessionExpired => Self::SessionExpired,
-        }
-    }
 }
 
 /// Outcome of an explicit [`RoomManager::leave_room`]. Used for logging and

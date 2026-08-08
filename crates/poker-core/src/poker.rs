@@ -74,6 +74,10 @@ impl CardSuit {
 }
 
 /// Represents a card rank (2-14, where 14 = Ace).
+///
+/// The explicit discriminants (2..=14) are the enum's numeric identity;
+/// [`Self::value`] is their single source of truth, with [`Self::index`] and
+/// [`Self::bit`] widening from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CardNumber {
     Two = 2,
@@ -130,46 +134,17 @@ impl CardNumber {
     }
 
     /// `usize` index matching the rank value (2–14), used to index the
-    /// `[u8; 15]` rank-count tables without an `as` cast.
+    /// `[u8; 15]` rank-count tables.
     #[must_use]
-    pub const fn index(self) -> usize {
-        // value() is 2..=14, which fits `usize` without widening side effects.
-        match self {
-            Self::Two => 2,
-            Self::Three => 3,
-            Self::Four => 4,
-            Self::Five => 5,
-            Self::Six => 6,
-            Self::Seven => 7,
-            Self::Eight => 8,
-            Self::Nine => 9,
-            Self::Ten => 10,
-            Self::Jack => 11,
-            Self::Queen => 12,
-            Self::King => 13,
-            Self::Ace => 14,
-        }
+    pub fn index(self) -> usize {
+        self.value().into()
     }
 
     /// `u16` bitmask bit position for the rank (same as [`Self::index`] but in
     /// `u16` so it can feed `1 << bit` without a cast).
     #[must_use]
-    pub const fn bit(self) -> u16 {
-        match self {
-            Self::Two => 2,
-            Self::Three => 3,
-            Self::Four => 4,
-            Self::Five => 5,
-            Self::Six => 6,
-            Self::Seven => 7,
-            Self::Eight => 8,
-            Self::Nine => 9,
-            Self::Ten => 10,
-            Self::Jack => 11,
-            Self::Queen => 12,
-            Self::King => 13,
-            Self::Ace => 14,
-        }
+    pub fn bit(self) -> u16 {
+        self.value().into()
     }
 
     /// Returns the rank as a display character.

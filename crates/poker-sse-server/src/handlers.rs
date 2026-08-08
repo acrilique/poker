@@ -27,7 +27,8 @@ use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use poker_core::protocol::{BlindConfig, GameError, PlayerAction};
+use poker_core::game_logic::StartGameError;
+use poker_core::protocol::{BlindConfig, PlayerAction};
 use serde::Deserialize;
 
 use crate::fanout::{broadcast_state, render_full_snapshot, send_error};
@@ -531,7 +532,7 @@ pub async fn action_toggle_late_entry(
             &mut room,
             &ctx.room_id,
             ctx.player_id,
-            &GameError::NotHost.to_string(),
+            &StartGameError::NotHost.to_string(),
         );
         return no_content();
     }
@@ -555,7 +556,7 @@ pub async fn action_update_settings(
             &mut room,
             &ctx.room_id,
             ctx.player_id,
-            &GameError::NotHost.to_string(),
+            &StartGameError::NotHost.to_string(),
         );
         return no_content();
     }

@@ -23,139 +23,8 @@ use thiserror::Error;
 use crate::poker::Card;
 
 // ---------------------------------------------------------------------------
-// Structured wire-level error / enum types
+// Wire-level types
 // ---------------------------------------------------------------------------
-
-/// Game phase / community-card stage, replacing ad-hoc strings like
-/// `"flop"`, `"turn"`, `"river"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Stage {
-    Preflop,
-    Flop,
-    Turn,
-    River,
-    Showdown,
-}
-
-impl fmt::Display for Stage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Preflop => "Preflop",
-            Self::Flop => "Flop",
-            Self::Turn => "Turn",
-            Self::River => "River",
-            Self::Showdown => "Showdown",
-        })
-    }
-}
-
-/// Structured errors for game-play actions, sent over the wire instead of
-/// free-form strings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "code")]
-pub enum GameError {
-    /// A received message could not be parsed.
-    InvalidMessage { detail: String },
-    /// The client has not joined a room yet.
-    NotInRoom,
-    /// The client is already inside a room and cannot create/join another.
-    AlreadyInRoom,
-    /// The game has not been started yet.
-    GameNotStarted,
-    /// The game has already been started.
-    GameAlreadyStarted,
-    /// It is not the requesting player's turn.
-    NotYourTurn,
-    /// Not enough players to start the game.
-    NotEnoughPlayers,
-    /// The requested action is not valid right now.
-    ActionNotAllowed { valid_actions: Vec<PlayerAction> },
-    /// Cannot check — must call or raise.
-    CannotCheck,
-    /// The player does not have enough chips.
-    InsufficientChips { have: u32, need: u32 },
-    /// The raise is below the minimum.
-    MinimumRaise { min_raise: u32 },
-    /// The referenced player was not found.
-    PlayerNotFound,
-    /// Only the room host may perform this action.
-    NotHost,
-}
-
-impl fmt::Display for GameError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidMessage { detail } => write!(f, "Invalid message: {detail}"),
-            Self::NotInRoom => f.write_str("Must create or join a room first"),
-            Self::AlreadyInRoom => f.write_str("Already in a room"),
-            Self::GameNotStarted => f.write_str("Game not started"),
-            Self::GameAlreadyStarted => f.write_str("Game already started"),
-            Self::NotYourTurn => f.write_str("Not your turn"),
-            Self::NotEnoughPlayers => f.write_str("Need at least 2 players to start"),
-            Self::ActionNotAllowed { valid_actions } => {
-                write!(f, "Invalid action. Valid: {valid_actions:?}")
-            }
-            Self::CannotCheck => f.write_str("Cannot check, must call or raise"),
-            Self::InsufficientChips { have, need } => {
-                write!(f, "Not enough chips. Have {have}, need {need}")
-            }
-            Self::MinimumRaise { min_raise } => {
-                write!(f, "Minimum raise is {min_raise}")
-            }
-            Self::PlayerNotFound => f.write_str("Player not found"),
-            Self::NotHost => f.write_str("Only the host can perform this action"),
-        }
-    }
-}
-
-/// Structured room-level errors sent over the wire.
-///
-/// This mirrors the server-side `RoomError` but is `Serialize`/`Deserialize`
-/// so it can travel as JSON.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "code")]
-pub enum RoomErrorKind {
-    /// The room ID is empty.
-    RoomIdEmpty,
-    /// The room ID is too long.
-    RoomIdTooLong,
-    /// The room ID contains invalid characters.
-    RoomIdInvalidChars,
-    /// The server room limit has been reached.
-    ServerFull,
-    /// A room with this ID already exists.
-    RoomAlreadyExists { room_id: String },
-    /// No room with this ID was found.
-    RoomNotFound { room_id: String },
-    /// The room is full (no open seats).
-    RoomFull,
-    /// The game is already in progress and late entry is disabled.
-    GameInProgress,
-    /// The session token is invalid or expired.
-    InvalidSession,
-    /// The session was valid but the player has already been removed.
-    SessionExpired,
-}
-
-impl fmt::Display for RoomErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RoomIdEmpty => f.write_str("Room ID cannot be empty"),
-            Self::RoomIdTooLong => f.write_str("Room ID must be fewer than 20 characters"),
-            Self::RoomIdInvalidChars => f.write_str("Room ID must be alphanumeric"),
-            Self::ServerFull => f.write_str("Server room limit reached. Try again later"),
-            Self::RoomAlreadyExists { room_id } => {
-                write!(f, "Room '{room_id}' already exists")
-            }
-            Self::RoomNotFound { room_id } => write!(f, "Room '{room_id}' not found"),
-            Self::RoomFull => f.write_str("Room is full"),
-            Self::GameInProgress => f.write_str("Game already in progress"),
-            Self::InvalidSession => f.write_str("Invalid or expired session token"),
-            Self::SessionExpired => f.write_str("Session expired — player was removed"),
-        }
-    }
-}
 
 /// Serializable card representation
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -418,9 +287,6 @@ pub enum ServerMessage {
     /// Your hole cards (private, only sent to the specific player)
     HoleCards { cards: [CardInfo; 2] },
 
-    /// Community cards revealed
-    CommunityCards { stage: Stage, cards: Vec<CardInfo> },
-
     /// It's your turn to act
     YourTurn {
         current_bet: u32,
@@ -494,41 +360,6 @@ pub enum ServerMessage {
         #[serde(default)]
         blind_config: BlindConfig,
     },
-
-    /// Full state snapshot sent on successful rejoin.
-    Rejoined {
-        room_id: String,
-        player_id: u32,
-        session_token: String,
-        chips: u32,
-        game_started: bool,
-        hand_number: u32,
-        pot: u32,
-        stage: Stage,
-        community_cards: Vec<CardInfo>,
-        hole_cards: Option<[CardInfo; 2]>,
-        players: Vec<PlayerInfo>,
-        sitting_out: Vec<u32>,
-        #[serde(default)]
-        folded: Vec<u32>,
-        #[serde(default)]
-        blind_config: BlindConfig,
-        #[serde(default)]
-        allow_late_entry: bool,
-        #[serde(default)]
-        is_host: bool,
-        dealer_id: u32,
-        small_blind_id: u32,
-        big_blind_id: u32,
-        small_blind: u32,
-        big_blind: u32,
-    },
-
-    /// Room-related error.
-    RoomError { error: RoomErrorKind },
-
-    /// Game-play error.
-    GameError { error: GameError },
 
     /// Generic OK response
     Ok,
