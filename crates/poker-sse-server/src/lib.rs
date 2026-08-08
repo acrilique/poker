@@ -32,6 +32,7 @@
     clippy::too_long_first_doc_paragraph
 )]
 
+pub mod fanout;
 pub mod flow;
 pub mod handlers;
 pub mod render;

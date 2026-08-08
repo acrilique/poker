@@ -30,10 +30,10 @@ use std::sync::atomic::Ordering;
 
 use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use poker_core::poker::Hand;
-use poker_core::protocol::{CardInfo, PlayerAction, card_to_info};
+use poker_core::protocol::{CardInfo, GameError, PlayerAction, card_to_info};
 use tokio::sync::Mutex;
 
-use crate::handlers::{broadcast_state, ctx_of, send_error};
+use crate::fanout::{broadcast_state, ctx_of, send_error};
 use crate::render;
 use crate::room::{CallerCtx, Fanout, Room, remove_player_now};
 
@@ -136,7 +136,12 @@ pub(crate) async fn start_game(ctx: CallerCtx) {
     let pid = ctx.player_id;
 
     if room.game_state.game_started {
-        send_error(&mut room, &ctx.room_id, pid, "Game already started");
+        send_error(
+            &mut room,
+            &ctx.room_id,
+            pid,
+            &GameError::GameAlreadyStarted.to_string(),
+        );
         return;
     }
     if room.game_state.player_count() < 2 {
@@ -144,7 +149,7 @@ pub(crate) async fn start_game(ctx: CallerCtx) {
             &mut room,
             &ctx.room_id,
             pid,
-            "Need at least 2 players to start",
+            &GameError::NotEnoughPlayers.to_string(),
         );
         return;
     }
@@ -153,7 +158,7 @@ pub(crate) async fn start_game(ctx: CallerCtx) {
             &mut room,
             &ctx.room_id,
             pid,
-            "Only the host can perform this action",
+            &GameError::NotHost.to_string(),
         );
         return;
     }

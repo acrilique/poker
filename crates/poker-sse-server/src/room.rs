@@ -166,8 +166,6 @@ pub struct Room {
     pub game_state: GameState,
     /// Per-player connection state keyed by player ID.
     pub players: HashMap<u32, PlayerConn>,
-    /// Blind increase configuration for this room.
-    pub blind_config: BlindConfig,
     /// Monotonically increasing counter incremented every time a new turn
     /// starts.  Used to invalidate stale turn-timer tasks.
     pub turn_counter: Arc<AtomicU64>,
@@ -193,7 +191,6 @@ impl Room {
         Self {
             game_state: gs,
             players: HashMap::new(),
-            blind_config,
             turn_counter: Arc::new(AtomicU64::new(0)),
             turn_started_at: None,
             sessions: HashMap::new(),
@@ -397,7 +394,7 @@ impl RoomManager {
 
         // Notify existing players about the new player. Rendered per viewer so
         // each still sees themselves highlighted.
-        crate::handlers::broadcast_state(&mut room, room_id);
+        crate::fanout::broadcast_state(&mut room, room_id);
 
         drop(room);
 
@@ -441,7 +438,7 @@ impl RoomManager {
             .map_or(0, |c| c.generation.wrapping_add(1));
 
         room.disconnected_at.remove(&player_id);
-        let ctx = crate::handlers::ctx_of(&room, room_id);
+        let ctx = crate::fanout::ctx_of(&room, room_id);
         let events = render::full_snapshot(&ctx, player_id);
 
         if let Some(conn) = room.players.get_mut(&player_id) {
@@ -500,7 +497,7 @@ impl RoomManager {
                     Some(p) if !p.sitting_out
                 ) {
                     room.game_state.set_sitting_out(player_id);
-                    crate::handlers::broadcast_state(&mut room, room_id);
+                    crate::fanout::broadcast_state(&mut room, room_id);
                 }
                 true
             } else {
@@ -530,7 +527,7 @@ impl RoomManager {
         } else {
             // Game hasn't started — remove immediately.
             remove_player_now(&mut room, room_id, player_id);
-            crate::handlers::broadcast_state(&mut room, room_id);
+            crate::fanout::broadcast_state(&mut room, room_id);
 
             let any_connected = room.players.values().any(|c| c.tx.is_some());
             drop(room);
@@ -578,7 +575,7 @@ impl RoomManager {
         if !in_hand {
             // Lobby / pre-game: remove now and tear the room down if empty.
             remove_player_now(&mut room, room_id, player_id);
-            crate::handlers::broadcast_state(&mut room, room_id);
+            crate::fanout::broadcast_state(&mut room, room_id);
 
             let any_connected = room.players.values().any(|c| c.tx.is_some());
             drop(room);
@@ -604,7 +601,7 @@ impl RoomManager {
         // Cancel any pending grace-period removal from a prior transient drop
         // — the leave flag now owns this seat's lifetime.
         room.disconnected_at.remove(&player_id);
-        crate::handlers::broadcast_state(&mut room, room_id);
+        crate::fanout::broadcast_state(&mut room, room_id);
         drop(room);
 
         LeaveOutcome::FoldedAndLeaving
@@ -654,7 +651,7 @@ impl RoomManager {
                     room.players.remove(&player_id);
                     room.game_state.remove_player(player_id);
                     promote_host_if_needed(&mut room, &rid, player_id);
-                    crate::handlers::broadcast_state(&mut room, &rid);
+                    crate::fanout::broadcast_state(&mut room, &rid);
                     tracing::info!(
                         room = %rid,
                         player = player_id,

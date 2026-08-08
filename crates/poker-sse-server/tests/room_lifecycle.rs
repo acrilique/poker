@@ -432,8 +432,6 @@ async fn update_settings_host_updates_and_reanchors() {
             room.game_state.last_blind_increase > anchor_before,
             "blind schedule re-anchored to ~now"
         );
-        // Room-level copy stays in sync.
-        assert_eq!(room.blind_config, room.game_state.blind_config);
     }
 }
 
@@ -453,7 +451,6 @@ fn apply_settings(
         increase_percent: blind_pct,
     };
     room.game_state.blind_config = new_config;
-    room.blind_config = new_config;
     if !room.game_state.game_started {
         let new_bbs = stack_bbs.max(1);
         room.game_state.starting_bbs = new_bbs;

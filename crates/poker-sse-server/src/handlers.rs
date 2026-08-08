@@ -22,21 +22,18 @@
 //! the post-action loop) and the render/fanout glue below. The SSE read side
 //! lives in [`crate::sse`].
 
-use std::sync::Arc;
-
 use askama::Template;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use poker_core::protocol::{BlindConfig, PlayerAction};
+use poker_core::protocol::{BlindConfig, GameError, PlayerAction};
 use serde::Deserialize;
-use tokio::sync::Mutex;
 
+use crate::fanout::{broadcast_state, render_full_snapshot, send_error};
 use crate::flow;
-use crate::render::{self, Ctx};
-use crate::room::{CallerCtx, Fanout, Room, resolve_caller};
-use poker_core::game_logic::TURN_TIMEOUT_SECS;
+use crate::render;
+use crate::room::{CallerCtx, Fanout, resolve_caller};
 
 use crate::AppState;
 
@@ -552,7 +549,7 @@ pub async fn action_toggle_late_entry(
             &mut room,
             &ctx.room_id,
             ctx.player_id,
-            "Only the host can perform this action",
+            &GameError::NotHost.to_string(),
         );
         return no_content();
     }
@@ -576,15 +573,13 @@ pub async fn action_update_settings(
             &mut room,
             &ctx.room_id,
             ctx.player_id,
-            "Only the host can perform this action",
+            &GameError::NotHost.to_string(),
         );
         return no_content();
     }
 
     let new_config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
     room.game_state.blind_config = new_config;
-    // Room.blind_config mirrors game_state's.
-    room.blind_config = new_config;
 
     // `starting_bbs` is frozen into `starting_chips` at game start, so only
     // apply it pre-game.
@@ -640,64 +635,8 @@ async fn authorize(state: &AppState, signals: &(impl HasSession + Sync)) -> Opti
 }
 
 // ---------------------------------------------------------------------------
-// Render / fanout glue (shared with [`crate::flow`])
+// GameOver cleanup (HTTP-specific)
 // ---------------------------------------------------------------------------
-
-/// Render the full state snapshot for `pid` under the room lock. `ctx` borrows
-/// the guard, so it can't be dropped before this returns — hence the allow.
-#[allow(clippy::significant_drop_tightening)]
-async fn render_full_snapshot(
-    room_arc: &Arc<Mutex<Room>>,
-    room_id: &str,
-    pid: u32,
-) -> Vec<datastar::DatastarEvent> {
-    let room = room_arc.lock().await;
-    let ctx = ctx_of(&room, room_id);
-    render::full_snapshot(&ctx, pid)
-}
-
-pub(crate) fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
-    // Absolute epoch-ms deadline for the current turn. Unlike a remaining-seconds
-    // value, a deadline is stable across renders: a reconnect at T=10 of a 30s
-    // turn gets the same deadline as the original render at T=0, so the
-    // client-side ring (driven by `deadline - Date.now()`) resumes at the right
-    // fraction instead of restarting from full. Computed with sub-second
-    // precision so the ring doesn't read up to ~1s too long after a reconnect.
-    let turn_deadline_ms = room.turn_started_at.map(|t| {
-        let elapsed_ms = t.elapsed().as_millis();
-        let remaining_ms = u128::from(TURN_TIMEOUT_SECS)
-            .saturating_mul(1000)
-            .saturating_sub(elapsed_ms);
-        render::epoch_ms_deadline(remaining_ms)
-    });
-    Ctx::new(&room.game_state, room_id, turn_deadline_ms)
-}
-
-/// Render the full settled state for every connected player (a fat-morph of
-/// `#game-root`) and fan out. Each viewer's state regions are recomputed from
-/// the final `GameState` at a point where the game is about to wait.
-pub(crate) fn broadcast_state(room: &mut Room, room_id: &str) {
-    let per_viewer: Vec<(u32, Vec<datastar::DatastarEvent>)> = {
-        let ctx = ctx_of(room, room_id);
-        room.players
-            .keys()
-            .map(|&viewer| (viewer, render::state_events(&ctx, viewer)))
-            .collect()
-    };
-    let mut fan = Fanout::new(room);
-    for (viewer, events) in per_viewer {
-        fan.send_to(viewer, &events);
-    }
-}
-
-/// Surface a transient error to one player via the in-table `#toast` region
-/// (see [`render::toast_events`]). For pre-action rejections like "Not your
-/// turn"; only fires after the player is connected, so the region is mounted.
-pub(crate) fn send_error(room: &mut Room, _room_id: &str, viewer: u32, detail: &str) {
-    let evs = render::toast_events(detail);
-    let mut fan = Fanout::new(room);
-    fan.send_to(viewer, &evs);
-}
 
 /// After an action, if the room hit `GameOver`, push the notice down every
 /// live stream and clear the session signals so a reload returns to the
