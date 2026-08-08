@@ -1045,6 +1045,48 @@ fn find_best_indices(best_hands: &[(usize, FullHand)]) -> Vec<usize> {
     winner_indices
 }
 
+/// Build a deck template with all `known` cards removed, returned as a
+/// stack-allocated `[Card; 52]` plus the number of cards populated. Shared by
+/// both Monte-Carlo equity simulators.
+#[inline]
+fn build_deck_template(known: &[Card]) -> ([Card; 52], usize) {
+    let all_cards = get_all_cards();
+    let mut deck_template = [DUMMY_CARD; 52];
+    let mut deck_size = 0usize;
+    for c in &all_cards {
+        if !known.is_empty() && known.contains(c) {
+            continue;
+        }
+        if let Some(slot) = deck_template.get_mut(deck_size) {
+            *slot = *c;
+        }
+        deck_size = deck_size.saturating_add(1);
+    }
+    (deck_template, deck_size)
+}
+
+/// Partial Fisher-Yates: randomise only the first `n` positions of `deck`
+/// (populated up to `deck_size`), leaving the rest untouched. Used by both
+/// equity simulators to shuffle only the cards they'll actually deal.
+#[inline]
+fn partial_shuffle(deck: &mut [Card; 52], deck_size: usize, n: usize, rng: &mut impl RngExt) {
+    for i in 0..n {
+        let j = rng.random_range(i..deck_size);
+        // i < j holds in Fisher-Yates; split the slice to get two mutable refs.
+        let (left, right) = deck.split_at_mut(j);
+        if let (Some(a), Some(b)) = (left.get_mut(i), right.first_mut()) {
+            std::mem::swap(a, b);
+        }
+    }
+}
+
+/// Convert a win/tie/loss count (bounded by `iterations`, which fits u32) to an
+/// f64 fraction without precision loss. Shared by both equity simulators.
+#[inline]
+fn to_pct(n: u64) -> f64 {
+    f64::from(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
 #[allow(dead_code)]
 #[must_use]
 pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, f64, f64) {
@@ -1054,7 +1096,7 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
     let mut rng = rng();
 
     // Identify known cards (stack-allocated)
-    let mut known = [Card(CardNumber::Two, CardSuit::Diamonds); 7];
+    let mut known = [DUMMY_CARD; 7];
     if let Some(slot) = known.get_mut(0) {
         *slot = hero.0;
     }
@@ -1073,21 +1115,7 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
     }
     let known_len = start.saturating_add(blen);
 
-    // Pre-build the deck template once (stack-allocated, zero heap alloc)
-    let all_cards = get_all_cards();
-    let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
-    let mut deck_size = 0usize;
-    for c in &all_cards {
-        if !known
-            .get(..known_len)
-            .is_some_and(|slice| slice.contains(c))
-        {
-            if let Some(slot) = deck_template.get_mut(deck_size) {
-                *slot = *c;
-            }
-            deck_size = deck_size.saturating_add(1);
-        }
-    }
+    let (deck_template, deck_size) = build_deck_template(known.get(..known_len).unwrap_or(&[]));
 
     // How many random cards we need per iteration:
     // 2 (villain) + missing board cards
@@ -1098,15 +1126,7 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
         // Copy template (stack → stack, no heap)
         let mut deck = deck_template;
 
-        // Partial Fisher-Yates: only randomise the positions we actually deal
-        for i in 0..cards_needed {
-            let j = rng.random_range(i..deck_size);
-            // i < j holds in Fisher-Yates; split the slice to get two mutable refs.
-            let (left, right) = deck.split_at_mut(j);
-            if let (Some(a), Some(b)) = (left.get_mut(i), right.first_mut()) {
-                std::mem::swap(a, b);
-            }
-        }
+        partial_shuffle(&mut deck, deck_size, cards_needed, &mut rng);
 
         // Deal villain from first 2 positions
         let v0 = deck.first().copied().unwrap_or(DUMMY_CARD);
@@ -1125,9 +1145,6 @@ pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, 
     }
 
     let iter_f64 = f64::from(u32::try_from(iterations).unwrap_or(u32::MAX));
-    // wins/ties/losses are bounded by `iterations`, which fits in u32, so the
-    // narrowing to u32 is lossless and lets us convert to f64 without precision loss.
-    let to_pct = |n: u64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
     (
         to_pct(wins) / iter_f64,
         to_pct(ties) / iter_f64,
@@ -1153,7 +1170,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
     let mut rng = rng();
 
     // Identify known cards (stack-allocated — max 23 cards: 9 players × 2 + 5 board)
-    let mut known = [Card(CardNumber::Two, CardSuit::Diamonds); 23];
+    let mut known = [DUMMY_CARD; 23];
     let mut known_len = 0usize;
     for h in hands {
         if let Some(slot) = known.get_mut(known_len) {
@@ -1174,21 +1191,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
     }
     known_len = known_len.saturating_add(blen);
 
-    // Pre-build the deck template once
-    let all_cards = get_all_cards();
-    let mut deck_template = [Card(CardNumber::Two, CardSuit::Diamonds); 52];
-    let mut deck_size = 0usize;
-    for c in &all_cards {
-        if !known
-            .get(..known_len)
-            .is_some_and(|slice| slice.contains(c))
-        {
-            if let Some(slot) = deck_template.get_mut(deck_size) {
-                *slot = *c;
-            }
-            deck_size = deck_size.saturating_add(1);
-        }
-    }
+    let (deck_template, deck_size) = build_deck_template(known.get(..known_len).unwrap_or(&[]));
 
     // Only need to deal missing board cards (all player hands are known)
     let board_missing = 5usize.saturating_sub(blen);
@@ -1202,15 +1205,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
     for _ in 0..iterations {
         let mut deck = deck_template;
 
-        // Partial Fisher-Yates for board cards only
-        for i in 0..board_missing {
-            let j = rng.random_range(i..deck_size);
-            // i < j holds in Fisher-Yates; split the slice to get two mutable refs.
-            let (left, right) = deck.split_at_mut(j);
-            if let (Some(a), Some(b)) = (left.get_mut(i), right.first_mut()) {
-                std::mem::swap(a, b);
-            }
-        }
+        partial_shuffle(&mut deck, deck_size, board_missing, &mut rng);
 
         // Build simulated board
         let (sim_board, _) = build_sim_board(board, &deck, 0);
@@ -1246,7 +1241,6 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
 
     // Calculate equity as win% + (tie% / number_of_tiers). Counts are bounded
     // by `iterations` (which fits u32), so narrowing before the f64 conversion is lossless.
-    let to_pct = |n: u64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
     hands
         .iter()
         .enumerate()
