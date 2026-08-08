@@ -75,7 +75,7 @@ async fn drive_post_action(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> PostAc
     loop {
         // Lone survivor (everyone else folded) → resolve and maybe deal again.
         if room.game_state.active_player_count() == 1 {
-            let _msgs = room.game_state.resolve_hand();
+            room.game_state.resolve_hand();
             broadcast_state(&mut room, room_id);
             drop(room);
             if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
@@ -89,7 +89,7 @@ async fn drive_post_action(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> PostAc
         if room.game_state.is_betting_complete() {
             // River + betting complete → showdown, resolve, maybe deal again.
             if room.game_state.phase == GamePhase::River {
-                let _msgs = room.game_state.resolve_hand();
+                room.game_state.resolve_hand();
                 broadcast_state(&mut room, room_id);
                 drop(room);
                 if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
@@ -101,7 +101,7 @@ async fn drive_post_action(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> PostAc
             }
             // Betting complete mid-hand → advance the phase and render the new
             // community cards.
-            let _phase_msgs = room.game_state.advance_phase();
+            room.game_state.advance_phase();
             broadcast_state(&mut room, room_id);
 
             // Only all-in players remain → hand off to the run-out path.
@@ -179,7 +179,7 @@ pub(crate) async fn start_game(ctx: CallerCtx) {
 
     // Start the first hand. State regions are rendered once below by
     // notify_turn_and_start_timer from this settled state.
-    let _hand_msgs = room.game_state.start_new_hand();
+    room.game_state.start_new_hand();
 
     // Notify the current player it's their turn, render state, and start the
     // timer.
@@ -356,7 +356,7 @@ async fn maybe_start_new_hand(
         return None;
     }
 
-    let _hand_msgs = room.game_state.start_new_hand();
+    room.game_state.start_new_hand();
     notify_turn_and_start_timer(&mut room, room_arc, room_id)
 }
 
@@ -371,11 +371,11 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
 
         let mut room = room_arc.lock().await;
 
-        let _phase_msgs = room.game_state.advance_phase();
+        room.game_state.advance_phase();
         broadcast_state(&mut room, room_id);
 
         if room.game_state.phase == GamePhase::Showdown {
-            let _msgs = room.game_state.resolve_hand();
+            room.game_state.resolve_hand();
             broadcast_state(&mut room, room_id);
             drop(room);
 

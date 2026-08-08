@@ -97,7 +97,7 @@ fn make_state(n_players: usize, phase: GamePhase) -> GameState {
     gs.game_started = true;
     gs.starting_big_blind = gs.big_blind;
     gs.starting_chips = gs.starting_bbs.saturating_mul(gs.big_blind);
-    let _ = gs.start_new_hand();
+    gs.start_new_hand();
 
     // Advance the engine to the requested phase.
     loop {
@@ -106,7 +106,7 @@ fn make_state(n_players: usize, phase: GamePhase) -> GameState {
         }
         // Force betting-complete so advance_phase is legal.
         let _ = gs.is_betting_complete();
-        let _ = gs.advance_phase();
+        gs.advance_phase();
     }
     gs
 }

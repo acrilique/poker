@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::poker::{Board, Card, Hand, get_all_cards};
-use crate::protocol::{BlindConfig, CardInfo, PlayerAction, ServerMessage, Stage, card_to_info};
+use crate::protocol::{BlindConfig, PlayerAction};
 use rand::rng;
 use rand::seq::SliceRandom;
 
@@ -323,9 +323,7 @@ impl GameState {
     }
 
     /// Start a new hand.
-    pub fn start_new_hand(&mut self) -> Vec<ServerMessage> {
-        let mut messages = Vec::new();
-
+    pub fn start_new_hand(&mut self) {
         // Blind increases run on a wall-clock schedule anchored to game start.
         // Players don't see a step until the next hand (when blinds are posted).
         if self.blind_config.is_enabled()
@@ -348,10 +346,6 @@ impl GameState {
                 };
                 last = next;
                 self.last_blind_increase = Some(last);
-                messages.push(ServerMessage::BlindsIncreased {
-                    small_blind: self.small_blind,
-                    big_blind: self.big_blind,
-                });
             }
         }
 
@@ -380,7 +374,7 @@ impl GameState {
             .retain(|&id| self.players.get(&id).is_some_and(|p| p.chips > 0));
 
         if self.player_order.len() < 2 {
-            return messages;
+            return;
         }
 
         // Move dealer button
@@ -392,14 +386,11 @@ impl GameState {
 
         // The ≥ 2 player guard above guarantees these seats exist; extract them
         // without indexing so a future change to that guard can't panic here.
-        let Some(dealer_id) = self.player_order.get(self.dealer_index).copied() else {
-            return messages;
-        };
         let Some(sb_id) = self.player_order.get(sb_index).copied() else {
-            return messages;
+            return;
         };
         let Some(bb_id) = self.player_order.get(bb_index).copied() else {
-            return messages;
+            return;
         };
 
         // Post blinds
@@ -414,15 +405,6 @@ impl GameState {
         self.big_blind_option = true;
         self.first_actor_index = Some(self.current_player_index);
         self.has_acted_this_round = false;
-
-        messages.push(ServerMessage::NewHand {
-            hand_number: self.hand_number,
-            dealer_id,
-            small_blind_id: sb_id,
-            big_blind_id: bb_id,
-            small_blind: self.small_blind,
-            big_blind: self.big_blind,
-        });
 
         // Deal hole cards
         let players_to_deal: Vec<u32> = self
@@ -449,8 +431,6 @@ impl GameState {
                 player.hole_cards = Some((c1, c2));
             }
         }
-
-        messages
     }
 
     fn post_blind(&mut self, player_id: u32, amount: u32) {
@@ -567,9 +547,7 @@ impl GameState {
     }
 
     /// Advance to next phase.
-    pub fn advance_phase(&mut self) -> Vec<ServerMessage> {
-        let mut messages = Vec::new();
-
+    pub fn advance_phase(&mut self) {
         for player in self.players.values_mut() {
             player.current_bet = 0;
         }
@@ -607,41 +585,24 @@ impl GameState {
                         self.community_cards.push(card);
                     }
                 }
-                let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
-                messages.push(ServerMessage::CommunityCards {
-                    stage: Stage::Flop,
-                    cards,
-                });
             }
             GamePhase::Flop => {
                 self.phase = GamePhase::Turn;
                 if let Some(card) = self.deal_card() {
                     self.community_cards.push(card);
                 }
-                let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
-                messages.push(ServerMessage::CommunityCards {
-                    stage: Stage::Turn,
-                    cards,
-                });
             }
             GamePhase::Turn => {
                 self.phase = GamePhase::River;
                 if let Some(card) = self.deal_card() {
                     self.community_cards.push(card);
                 }
-                let cards: Vec<CardInfo> = self.community_cards.iter().map(card_to_info).collect();
-                messages.push(ServerMessage::CommunityCards {
-                    stage: Stage::River,
-                    cards,
-                });
             }
             GamePhase::River => {
                 self.phase = GamePhase::Showdown;
             }
             _ => {}
         }
-
-        messages
     }
 
     /// Calculate side pots from player contributions.
@@ -709,28 +670,28 @@ impl GameState {
     ///
     /// Returns the winning player IDs and the hand rank description.
     fn find_pot_winners(
-        hands: &[(u32, [CardInfo; 2], Hand)],
+        hands: &[(u32, Hand)],
         eligible: &[u32],
         board: &Board,
     ) -> (Vec<u32>, String) {
-        let eligible_hands: Vec<&(u32, [CardInfo; 2], Hand)> = hands
+        let eligible_hands: Vec<&(u32, Hand)> = hands
             .iter()
-            .filter(|(id, _, _)| eligible.contains(id))
+            .filter(|(id, _)| eligible.contains(id))
             .collect();
 
         if eligible_hands.len() <= 1 {
-            let id = eligible_hands.first().map_or(0, |(id, _, _)| *id);
+            let id = eligible_hands.first().map_or(0, |(id, _)| *id);
             return (vec![id], "Winner".to_string());
         }
 
         let mut winning_ids: Vec<u32> = Vec::new();
         let mut best_rank = String::new();
 
-        for (id_i, _, hand_i) in &eligible_hands {
+        for (id_i, hand_i) in &eligible_hands {
             let full_i = hand_i.best(board);
             let mut is_winner = true;
 
-            for (id_j, _, hand_j) in &eligible_hands {
+            for (id_j, hand_j) in &eligible_hands {
                 if id_i == id_j {
                     continue;
                 }
@@ -780,23 +741,20 @@ impl GameState {
     }
 
     /// Determine winner(s) and distribute pot using side-pot logic.
-    pub fn resolve_hand(&mut self) -> Vec<ServerMessage> {
-        let mut messages = Vec::new();
-
-        let mut hands_to_show: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
+    pub fn resolve_hand(&mut self) {
+        let mut hands_to_show: Vec<(u32, Hand)> = Vec::new();
 
         for &id in &self.player_order {
             if let Some(player) = self.players.get(&id)
                 && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
                 && let Some((c1, c2)) = player.hole_cards
             {
-                let cards = [card_to_info(&c1), card_to_info(&c2)];
-                hands_to_show.push((id, cards, Hand(c1, c2)));
+                hands_to_show.push((id, Hand(c1, c2)));
             }
         }
 
         if hands_to_show.is_empty() {
-            return messages;
+            return;
         }
 
         let board = self.build_board();
@@ -806,26 +764,11 @@ impl GameState {
 
         if hands_to_show.len() == 1 {
             // Everyone else folded — sole survivor takes the whole pot.
-            let Some((id, _, _)) = hands_to_show.first() else {
-                return messages;
+            let Some((id, _)) = hands_to_show.first() else {
+                return;
             };
             winnings.insert(*id, (self.pot, "Winner".to_string()));
         } else {
-            // Emit showdown message so clients see all hands.
-            let showdown_hands: Vec<(u32, [CardInfo; 2], String)> = hands_to_show
-                .iter()
-                .map(|(id, cards, hand)| {
-                    let rank = hand
-                        .best(&board)
-                        .map_or_else(|| "Unknown".to_string(), |full| format!("{}", full.rank()));
-                    (*id, *cards, rank)
-                })
-                .collect();
-
-            messages.push(ServerMessage::Showdown {
-                hands: showdown_hands,
-            });
-
             // Calculate and award each side pot independently.
             let side_pots = self.calculate_side_pots();
 
@@ -888,40 +831,15 @@ impl GameState {
 
         self.last_winners.clone_from(&winners);
 
-        messages.push(ServerMessage::RoundWinner { winners });
-
-        for player in self.players.values() {
-            messages.push(ServerMessage::ChipUpdate {
-                player_id: player.id,
-                chips: player.chips,
-            });
-        }
-
-        for player in self.players.values() {
-            if player.chips == 0 && player.status != PlayerStatus::Out {
-                messages.push(ServerMessage::PlayerEliminated {
-                    player_id: player.id,
-                });
-            }
-        }
-
         self.phase = GamePhase::HandOver;
 
-        let remaining: Vec<&Player> = self.players.values().filter(|p| p.chips > 0).collect();
-
-        if remaining.len() == 1
-            && let Some(winner) = remaining.first()
-        {
-            messages.push(ServerMessage::GameOver {
-                winner_id: winner.id,
-                winner_name: winner.name.clone(),
-            });
+        // The game ends when exactly one player holds all the chips.
+        if self.players.values().filter(|p| p.chips > 0).count() == 1 {
             self.game_started = false;
             self.phase = GamePhase::Lobby;
         }
 
         self.pot = 0;
-        messages
     }
 
     /// Build a [`Board`] from the current community cards.
@@ -1210,7 +1128,6 @@ mod tests {
     )]
     use super::*;
     use crate::poker::{Card, CardNumber, CardSuit};
-    use crate::protocol::ServerMessage;
 
     fn setup_game(
         players: Vec<(u32, &str, u32, PlayerStatus, Option<(Card, Card)>, u32)>,
@@ -1303,26 +1220,30 @@ mod tests {
         )
     }
 
-    fn find_round_winner(msgs: &[ServerMessage]) -> &Vec<(u32, u32, String)> {
-        msgs.iter()
-            .find_map(|m| match m {
-                ServerMessage::RoundWinner { winners } => Some(winners),
-                _ => None,
-            })
-            .expect("expected RoundWinner message")
-    }
-
-    fn has_showdown(msgs: &[ServerMessage]) -> bool {
-        msgs.iter()
-            .any(|m| matches!(m, ServerMessage::Showdown { .. }))
-    }
-
-    fn player_winnings(winners: &[(u32, u32, String)], player_id: u32) -> u32 {
-        winners
+    /// Total amount a player won in the resolved hand, read from `GameState`.
+    fn player_winnings(gs: &GameState, player_id: u32) -> u32 {
+        gs.last_winners
             .iter()
             .filter(|(id, _, _)| *id == player_id)
             .map(|(_, amount, _)| *amount)
             .sum()
+    }
+
+    /// Whether the resolved hand went to showdown (≥2 eligible Active/AllIn
+    /// players at resolve time). Replaces the old "did a Showdown message
+    /// appear" check — the engine no longer emits messages, so derive from the
+    /// setup: a showdown happened iff more than one player had revealed cards.
+    fn went_to_showdown(gs: &GameState) -> bool {
+        gs.player_order
+            .iter()
+            .filter(|&&id| {
+                gs.players.get(&id).is_some_and(|p| {
+                    matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn)
+                        && p.hole_cards.is_some()
+                })
+            })
+            .count()
+            > 1
     }
 
     // -----------------------------------------------------------------------
@@ -1354,11 +1275,10 @@ mod tests {
         );
         assert_eq!(gs.pot, 300);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 300);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 1), 300);
         assert_eq!(gs.players.get(&1).unwrap().chips, 300);
         assert_eq!(gs.players.get(&2).unwrap().chips, 0);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
@@ -1397,12 +1317,11 @@ mod tests {
         );
         assert_eq!(gs.pot, 250);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 150);
-        assert_eq!(player_winnings(winners, 2), 100);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 1), 150);
+        assert_eq!(player_winnings(&gs, 2), 100);
         assert_eq!(gs.players.get(&1).unwrap().chips, 150);
         assert_eq!(gs.players.get(&2).unwrap().chips, 100);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
@@ -1439,11 +1358,10 @@ mod tests {
         );
         assert_eq!(gs.pot, 250);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 2), 250);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 2), 250);
         assert_eq!(gs.players.get(&1).unwrap().chips, 0);
         assert_eq!(gs.players.get(&2).unwrap().chips, 250);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
@@ -1492,13 +1410,12 @@ mod tests {
         );
         assert_eq!(gs.pot, 275);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 100);
-        assert_eq!(player_winnings(winners, 2), 75);
-        assert_eq!(player_winnings(winners, 3), 100);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 1), 100);
+        assert_eq!(player_winnings(&gs, 2), 75);
+        assert_eq!(player_winnings(&gs, 3), 100);
         assert_eq!(gs.players.get(&1).unwrap().chips, 100);
         assert_eq!(gs.players.get(&2).unwrap().chips, 75);
         assert_eq!(gs.players.get(&3).unwrap().chips, 100);
@@ -1530,11 +1447,10 @@ mod tests {
         );
         assert_eq!(gs.pot, 300);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 2), 300);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 2), 300);
         assert_eq!(gs.players.get(&1).unwrap().chips, 0);
         assert_eq!(gs.players.get(&2).unwrap().chips, 300);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
@@ -1565,14 +1481,13 @@ mod tests {
         );
         assert_eq!(gs.pot, 160);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
         assert!(
-            !has_showdown(&msgs),
+            !went_to_showdown(&gs),
             "solo active player should not trigger showdown"
         );
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 3), 160);
+        assert_eq!(player_winnings(&gs, 3), 160);
         assert_eq!(gs.players.get(&3).unwrap().chips, 160);
         assert_eq!(gs.pot, 0);
     }
@@ -1591,12 +1506,11 @@ mod tests {
         );
         assert_eq!(gs.pot, 200);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 100);
-        assert_eq!(player_winnings(winners, 2), 100);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 1), 100);
+        assert_eq!(player_winnings(&gs, 2), 100);
         assert_eq!(gs.players.get(&1).unwrap().chips, 100);
         assert_eq!(gs.players.get(&2).unwrap().chips, 100);
         assert_eq!(gs.pot, 0);
@@ -1622,9 +1536,8 @@ mod tests {
         );
         assert_eq!(gs.pot, 201);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        let _winners = find_round_winner(&msgs);
         let p1_chips = gs.players.get(&1).unwrap().chips;
         let p2_chips = gs.players.get(&2).unwrap().chips;
         assert_eq!(p1_chips + p2_chips, 201, "all chips must be distributed");
@@ -1659,14 +1572,13 @@ mod tests {
         );
         assert_eq!(gs.pot, 250);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
         assert!(
-            !has_showdown(&msgs),
+            !went_to_showdown(&gs),
             "solo survivor should not trigger showdown"
         );
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 250);
+        assert_eq!(player_winnings(&gs, 1), 250);
         assert_eq!(gs.players.get(&1).unwrap().chips, 250);
         assert_eq!(gs.pot, 0);
     }
@@ -1703,12 +1615,11 @@ mod tests {
         );
         assert_eq!(gs.pot, 250);
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        assert!(has_showdown(&msgs));
-        let winners = find_round_winner(&msgs);
-        assert_eq!(player_winnings(winners, 1), 150);
-        assert_eq!(player_winnings(winners, 2), 100);
+        assert!(went_to_showdown(&gs));
+        assert_eq!(player_winnings(&gs, 1), 150);
+        assert_eq!(player_winnings(&gs, 2), 100);
         assert_eq!(gs.players.get(&1).unwrap().chips, 150);
         assert_eq!(gs.players.get(&2).unwrap().chips, 100);
         assert_eq!(gs.players.get(&3).unwrap().chips, 0);
@@ -1745,16 +1656,14 @@ mod tests {
         gs.game_started = true;
         gs.hand_number = 5;
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
         // Alice wins the pot; Bob and Charlie still hold chips → not game over.
         assert!(
-            msgs.iter()
-                .all(|m| !matches!(m, ServerMessage::GameOver { .. })),
+            !gs.is_game_over(),
             "GameOver must not fire while more than one player has chips"
         );
         assert!(gs.game_started, "game_started must stay true mid-game");
-        assert!(!gs.is_game_over());
     }
 
     // -----------------------------------------------------------------------
@@ -1781,39 +1690,23 @@ mod tests {
         gs.game_started = true;
         gs.hand_number = 5;
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
-        let winner = msgs
-            .iter()
-            .find_map(|m| match m {
-                ServerMessage::GameOver { winner_id, .. } => Some(*winner_id),
-                _ => None,
-            })
-            .expect("GameOver should fire when exactly one player has chips");
-        assert_eq!(winner, 1);
+        assert!(
+            gs.is_game_over(),
+            "GameOver should fire when exactly one player has chips"
+        );
+        // The sole survivor holding chips is the winner.
+        let winner = gs
+            .players
+            .values()
+            .find(|p| p.chips > 0)
+            .expect("one player should hold all chips");
+        assert_eq!(winner.id, 1);
         assert!(
             !gs.game_started,
             "game_started must be cleared on game over"
         );
-        assert!(gs.is_game_over());
-    }
-
-    /// Count `BlindsIncreased` events in a message slice.
-    fn count_blind_increases(msgs: &[ServerMessage]) -> usize {
-        msgs.iter()
-            .filter(|m| matches!(m, ServerMessage::BlindsIncreased { .. }))
-            .count()
-    }
-
-    /// Latest big blind from a message slice (0 if none).
-    fn latest_big_blind(msgs: &[ServerMessage]) -> u32 {
-        msgs.iter()
-            .rev()
-            .find_map(|m| match m {
-                ServerMessage::BlindsIncreased { big_blind, .. } => Some(*big_blind),
-                _ => None,
-            })
-            .unwrap_or(0)
     }
 
     /// Blinds don't increase on a fresh `start_new_hand` (no anchor set yet —
@@ -1825,9 +1718,10 @@ mod tests {
             interval_secs: 1,
             increase_percent: 50,
         };
+        let before = gs.big_blind;
         // last_blind_increase is None → no increase possible.
-        let msgs = gs.start_new_hand();
-        assert_eq!(count_blind_increases(&msgs), 0);
+        gs.start_new_hand();
+        assert_eq!(gs.big_blind, before);
     }
 
     /// Blinds don't increase before the interval has elapsed.
@@ -1839,8 +1733,9 @@ mod tests {
             increase_percent: 50,
         };
         gs.last_blind_increase = Some(Instant::now());
-        let msgs = gs.start_new_hand();
-        assert_eq!(count_blind_increases(&msgs), 0);
+        let before = gs.big_blind;
+        gs.start_new_hand();
+        assert_eq!(gs.big_blind, before);
     }
 
     /// One interval elapsed → exactly one increase.
@@ -1856,10 +1751,9 @@ mod tests {
             .checked_sub(Duration::from_secs(1))
             .map(Some)
             .unwrap();
-        let msgs = gs.start_new_hand();
-        assert_eq!(count_blind_increases(&msgs), 1);
+        gs.start_new_hand();
         // 20 + ceil(20*50/100) = 30.
-        assert_eq!(latest_big_blind(&msgs), 30);
+        assert_eq!(gs.big_blind, 30);
     }
 
     /// A gap spanning three intervals must apply THREE increases (catch-up),
@@ -1877,14 +1771,12 @@ mod tests {
             .checked_sub(Duration::from_secs(3))
             .map(Some)
             .unwrap();
-        let msgs = gs.start_new_hand();
+        gs.start_new_hand();
+        // 20 → 40 → 80 → 160.
         assert_eq!(
-            count_blind_increases(&msgs),
-            3,
+            gs.big_blind, 160,
             "a 3-interval gap must catch up all three levels"
         );
-        // 20 → 40 → 80 → 160.
-        assert_eq!(latest_big_blind(&msgs), 160);
     }
 
     /// After catch-up the anchor sits on the interval boundary (not "now"), so
@@ -1903,20 +1795,18 @@ mod tests {
             .unwrap();
         // First hand: catches up two levels → 20 → 40 → 80. Anchor now at
         // (original + 2s), i.e. ~now.
-        let _ = gs.start_new_hand();
+        gs.start_new_hand();
         assert_eq!(gs.big_blind, 80);
 
         // Simulate one more interval passing before the next hand.
         gs.last_blind_increase = gs
             .last_blind_increase
             .and_then(|t| t.checked_sub(Duration::from_secs(1)));
-        let msgs = gs.start_new_hand();
+        gs.start_new_hand();
         assert_eq!(
-            count_blind_increases(&msgs),
-            1,
+            gs.big_blind, 160,
             "exactly one step after one more interval"
         );
-        assert_eq!(latest_big_blind(&msgs), 160);
     }
 
     /// Host removed → host rights go to the lowest-id remaining player.
@@ -1989,7 +1879,7 @@ mod tests {
         gs.hand_number = 5;
         gs.phase = GamePhase::River;
 
-        let msgs = gs.resolve_hand();
+        gs.resolve_hand();
 
         // Phase must move off River to HandOver — staying on River is the bug
         // that lit up a phantom turn/timer/action bar during the pre-deal wait.
@@ -1999,8 +1889,7 @@ mod tests {
             "phase must be HandOver after resolve"
         );
         assert!(
-            msgs.iter()
-                .all(|m| !matches!(m, ServerMessage::GameOver { .. })),
+            !gs.is_game_over(),
             "not game over — two players still hold chips"
         );
         // Alice (royal flush) wins the 200 pot.
@@ -2208,11 +2097,11 @@ mod tests {
         gs.hand_number = 5;
         gs.phase = GamePhase::River;
 
-        let _ = gs.resolve_hand();
+        gs.resolve_hand();
         assert_eq!(gs.phase, GamePhase::HandOver);
         assert!(!gs.last_winners.is_empty());
 
-        let _ = gs.start_new_hand();
+        gs.start_new_hand();
         assert_eq!(gs.phase, GamePhase::PreFlop, "new deal must clear HandOver");
         assert!(
             gs.last_winners.is_empty(),
