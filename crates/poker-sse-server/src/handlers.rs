@@ -488,9 +488,9 @@ pub async fn action_sitin(
         return no_content();
     };
     let room_arc = ctx.room_arc.clone();
-    // Decide under the room lock whether to start a new hand, then release
-    // before awaiting (so we don't hold it across the deal/timer setup).
-    let start_new_hand = {
+    // Decide under the room lock whether to resume, then release before
+    // awaiting (so we don't hold it across the deal/timer setup).
+    let resume = {
         let mut room = room_arc.lock().await;
         let pid = ctx.player_id;
         if !room
@@ -502,35 +502,17 @@ pub async fn action_sitin(
             return no_content();
         }
         room.game_state.set_sitting_in(pid);
-        // Re-render (player list + controls changed). The branch below renders
-        // again if it un-pauses the game and starts a hand.
+        // Re-render (player list + controls changed). resume_after_sit_in
+        // renders again if it un-pauses the game and starts a hand.
         broadcast_state(&mut room, &ctx.room_id);
 
-        // If the game was paused waiting for players, maybe start a new hand.
-        if room.game_state.waiting_for_players {
-            let active_count = room
-                .game_state
-                .player_order
-                .iter()
-                .filter(|id| {
-                    room.game_state
-                        .players
-                        .get(id)
-                        .is_some_and(|p| !p.sitting_out && p.chips > 0)
-                })
-                .count();
-            if active_count >= 2 {
-                room.game_state.waiting_for_players = false;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        // If the game was paused waiting for players, hand off to
+        // resume_after_sit_in → maybe_start_new_hand, which re-evaluates the
+        // dealable count and re-pauses if the sit-in didn't reach ≥2.
+        room.game_state.waiting_for_players
     };
 
-    if start_new_hand {
+    if resume {
         flow::resume_after_sit_in(&room_arc, &ctx.room_id).await;
     }
     no_content()
@@ -578,33 +560,9 @@ pub async fn action_update_settings(
         return no_content();
     }
 
-    let new_config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
-    room.game_state.blind_config = new_config;
-
-    // `starting_bbs` is frozen into `starting_chips` at game start, so only
-    // apply it pre-game.
-    if !room.game_state.game_started {
-        let new_bbs = starting_bbs_from_signals(&signals.stack_bbs);
-        room.game_state.starting_bbs = new_bbs;
-        // Chips are frozen into each player at join time
-        // (`add_player_with_chips`), so `starting_bbs` alone doesn't reach
-        // already-seated players. Pre-game no chips have been won or lost, so
-        // every player is still at the now-stale buy-in — rebuy them at the
-        // new amount so existing players match those who join afterwards.
-        // `big_blind` is the right multiplier here: `starting_big_blind` is
-        // only frozen at game start, so it's still 0 pre-game (matching the
-        // `bb` selection in `add_player_with_chips`).
-        let new_stack = new_bbs.saturating_mul(room.game_state.big_blind);
-        for player in room.game_state.players.values_mut() {
-            player.chips = new_stack;
-        }
-    }
-
-    // Re-anchor the schedule so the catch-up loop in start_new_hand doesn't
-    // step blinds repeatedly when the interval changes.
-    if room.game_state.game_started && new_config.is_enabled() {
-        room.game_state.last_blind_increase = Some(std::time::Instant::now());
-    }
+    let config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
+    let starting_bbs = starting_bbs_from_signals(&signals.stack_bbs);
+    room.game_state.apply_settings(config, starting_bbs);
 
     broadcast_state(&mut room, &ctx.room_id);
     drop(room);

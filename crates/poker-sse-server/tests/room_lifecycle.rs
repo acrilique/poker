@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use poker_core::protocol::BlindConfig;
 use poker_sse_server::AppState;
-use poker_sse_server::room::{LeaveOutcome, Room, RoomManager};
+use poker_sse_server::room::{LeaveOutcome, RoomManager};
 
 /// Build a fresh AppState backed by an empty RoomManager.
 fn app_state() -> AppState {
@@ -398,19 +398,25 @@ async fn update_settings_rejects_non_host() {
 }
 
 /// A host applying blind settings updates both `blind_config` copies and
-/// re-anchors the schedule mid-game. `apply_settings` replicates the handler's
-/// mutation so this pins its post-conditions.
+/// re-anchors the schedule mid-game. Calls the real `GameState::apply_settings`
+/// (the handler's mutation) directly, so this pins its post-conditions.
 #[tokio::test]
 async fn update_settings_host_updates_and_reanchors() {
     let state = app_state();
     let players = room_with_players(&state, "set2", &["host", "x"]).await;
     let host_id = players[0].0;
-
     let room_arc = state.room_manager.get_room("set2").await.unwrap();
+
+    assert_eq!(room_arc.lock().await.game_state.host_id, host_id);
+
     // Pre-game: starting_bbs applies.
     {
         let mut room = room_arc.lock().await;
-        apply_settings(&mut room, host_id, 5, 50, 200, false);
+        let config = BlindConfig {
+            interval_secs: 300,
+            increase_percent: 50,
+        };
+        room.game_state.apply_settings(config, 200);
         assert_eq!(room.game_state.blind_config.interval_secs, 300);
         assert_eq!(room.game_state.blind_config.increase_percent, 50);
         assert_eq!(room.game_state.starting_bbs, 200);
@@ -422,7 +428,11 @@ async fn update_settings_host_updates_and_reanchors() {
         room.game_state.last_blind_increase =
             Some(std::time::Instant::now() - Duration::from_secs(3600));
         let anchor_before = room.game_state.last_blind_increase;
-        apply_settings(&mut room, host_id, 5, 50, 999, true);
+        let config = BlindConfig {
+            interval_secs: 300,
+            increase_percent: 50,
+        };
+        room.game_state.apply_settings(config, 999);
         assert_eq!(
             room.game_state.starting_bbs, 200,
             "mid-game stack edit ignored"
@@ -432,37 +442,6 @@ async fn update_settings_host_updates_and_reanchors() {
             room.game_state.last_blind_increase > anchor_before,
             "blind schedule re-anchored to ~now"
         );
-    }
-}
-
-/// Mirrors `action_update_settings`'s mutation exactly, so this test pins the
-/// handler's intended post-conditions without standing up the HTTP layer.
-fn apply_settings(
-    room: &mut tokio::sync::MutexGuard<'_, Room>,
-    caller: u32,
-    blind_mins: u64,
-    blind_pct: u32,
-    stack_bbs: u32,
-    game_started: bool,
-) {
-    assert_eq!(room.game_state.host_id, caller, "caller must be host");
-    let new_config = BlindConfig {
-        interval_secs: blind_mins.saturating_mul(60),
-        increase_percent: blind_pct,
-    };
-    room.game_state.blind_config = new_config;
-    if !room.game_state.game_started {
-        let new_bbs = stack_bbs.max(1);
-        room.game_state.starting_bbs = new_bbs;
-        // Existing players' chips were frozen at their (now-stale) join-time
-        // buy-in, so rebuy them at the new amount. See `action_update_settings`.
-        let new_stack = new_bbs.saturating_mul(room.game_state.big_blind);
-        for player in room.game_state.players.values_mut() {
-            player.chips = new_stack;
-        }
-    }
-    if game_started && new_config.is_enabled() {
-        room.game_state.last_blind_increase = Some(std::time::Instant::now());
     }
 }
 
@@ -476,7 +455,6 @@ async fn update_settings_pre_game_rebuys_existing_players() {
     // `room_with_players` uses `create_room(.., 100)` BBs. With the default
     // 20 big blind that's 2000 chips per seated player.
     let players = room_with_players(&state, "set3", &["host", "p2", "p3"]).await;
-    let host_id = players[0].0;
 
     let room_arc = state.room_manager.get_room("set3").await.unwrap();
     {
@@ -495,7 +473,11 @@ async fn update_settings_pre_game_rebuys_existing_players() {
     // Host raises the stack to 300 BBs (pre-game).
     {
         let mut room = room_arc.lock().await;
-        apply_settings(&mut room, host_id, 5, 50, 300, false);
+        let config = BlindConfig {
+            interval_secs: 300,
+            increase_percent: 50,
+        };
+        room.game_state.apply_settings(config, 300);
     }
 
     let expected_new = 300 * 20;

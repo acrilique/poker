@@ -297,6 +297,12 @@ impl GameState {
     }
 
     /// Get players who can still act (active but not all-in).
+    ///
+    /// One of three "how many players" predicates — pick by intent:
+    /// - [`Self::active_player_count`] — mid-hand, by status flag (`Active | AllIn`).
+    /// - [`Self::actionable_players`] — players who can still bet this round (`Active` only).
+    /// - [`Self::dealable_player_count`] — seated, not sitting out, with chips; the
+    ///   "can we deal a new hand?" threshold.
     #[must_use]
     pub fn actionable_players(&self) -> Vec<u32> {
         self.player_order
@@ -310,6 +316,21 @@ impl GameState {
             .collect()
     }
 
+    /// Count seated players who are not sitting out and still hold chips — the
+    /// threshold for dealing a new hand. See [`Self::actionable_players`] for the
+    /// other player-count predicates.
+    #[must_use]
+    pub fn dealable_player_count(&self) -> usize {
+        self.player_order
+            .iter()
+            .filter(|&&id| {
+                self.players
+                    .get(&id)
+                    .is_some_and(|p| !p.sitting_out && p.chips > 0)
+            })
+            .count()
+    }
+
     /// Shuffle and create a new deck.
     pub fn new_deck(&mut self) {
         self.deck = get_all_cards().to_vec();
@@ -320,6 +341,43 @@ impl GameState {
     /// Deal a card from the deck.
     pub fn deal_card(&mut self) -> Option<Card> {
         self.deck.pop()
+    }
+
+    /// Start the game: validate the caller and preconditions, freeze the
+    /// starting-chips/big-blind baseline (so late entrants match the original
+    /// buy-in), seed the blind schedule, and deal the first hand.
+    ///
+    /// This owns the game-start invariants so transports don't re-derive them.
+    /// The caller still renders state and notifies the first player's turn
+    /// after this returns.
+    ///
+    /// # Errors
+    /// Returns [`StartGameError`] when a precondition fails. The transport
+    /// surfaces the message to the player.
+    pub fn try_start(&mut self, host_id: u32) -> Result<(), StartGameError> {
+        if self.game_started {
+            return Err(StartGameError::AlreadyStarted);
+        }
+        if self.player_count() < 2 {
+            return Err(StartGameError::NotEnoughPlayers);
+        }
+        if self.host_id != host_id {
+            return Err(StartGameError::NotHost);
+        }
+
+        self.game_started = true;
+
+        // Freeze the starting chip amount and big blind for late entries.
+        self.starting_big_blind = self.big_blind;
+        self.starting_chips = self.starting_bbs.saturating_mul(self.big_blind);
+
+        // Initialise the blind increase timer if configured.
+        if self.blind_config.is_enabled() {
+            self.last_blind_increase = Some(Instant::now());
+        }
+
+        self.start_new_hand();
+        Ok(())
     }
 
     /// Start a new hand.
@@ -886,6 +944,38 @@ impl GameState {
         Some(remaining)
     }
 
+    /// Apply host-initiated settings: a new blind schedule and (pre-game only)
+    /// a new starting stack.
+    ///
+    /// `starting_bbs` is frozen into `starting_chips` at game start
+    /// ([`Self::try_start`]), so only apply it pre-game. Chips are frozen into
+    /// each seated player at join time (`add_player_with_chips`), so when the
+    /// stack changes pre-game — before any chips have been won or lost — every
+    /// player is still at the now-stale buy-in and must be rebought at the new
+    /// amount so they match subsequent joiners. `big_blind` is the right
+    /// multiplier here: `starting_big_blind` is only frozen at game start, so
+    /// it's still 0 pre-game (matching the `bb` selection in
+    /// `add_player_with_chips`).
+    ///
+    /// Mid-game, re-anchor the blind schedule to now so the catch-up loop in
+    /// [`Self::start_new_hand`] doesn't step blinds repeatedly when the interval
+    /// changes.
+    pub fn apply_settings(&mut self, config: BlindConfig, starting_bbs: u32) {
+        self.blind_config = config;
+
+        if !self.game_started {
+            self.starting_bbs = starting_bbs;
+            let new_stack = starting_bbs.saturating_mul(self.big_blind);
+            for player in self.players.values_mut() {
+                player.chips = new_stack;
+            }
+        }
+
+        if self.game_started && self.blind_config.is_enabled() {
+            self.last_blind_increase = Some(Instant::now());
+        }
+    }
+
     /// Get valid actions for current player.
     #[must_use]
     pub fn valid_actions(&self, player_id: u32) -> Vec<PlayerAction> {
@@ -1116,6 +1206,29 @@ impl std::fmt::Display for ActionError {
 }
 
 impl std::error::Error for ActionError {}
+
+/// Error from [`GameState::try_start`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartGameError {
+    /// The game has already started.
+    AlreadyStarted,
+    /// Fewer than two players are seated.
+    NotEnoughPlayers,
+    /// The caller is not the room host.
+    NotHost,
+}
+
+impl std::fmt::Display for StartGameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyStarted => f.write_str("Game already started"),
+            Self::NotEnoughPlayers => f.write_str("Need at least 2 players to start"),
+            Self::NotHost => f.write_str("Only the host can perform this action"),
+        }
+    }
+}
+
+impl std::error::Error for StartGameError {}
 
 #[cfg(test)]
 mod tests {
@@ -2106,6 +2219,169 @@ mod tests {
         assert!(
             gs.last_winners.is_empty(),
             "last_winners must be cleared by the next deal"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // dealable_player_count / try_start / apply_settings
+    // -----------------------------------------------------------------------
+
+    /// A fresh lobby with two seated, chip-bearing players has 2 dealable. Sitting
+    /// out and chipless players don't count toward the deal threshold.
+    #[test]
+    fn test_dealable_player_count_excludes_sitting_out_and_chipless() {
+        let mut gs = GameState::new();
+        // Two healthy players.
+        let p1 = gs.add_player("a".into()).id;
+        let p2 = gs.add_player("b".into()).id;
+        // A third who is sitting out.
+        let p3 = gs.add_player("c".into()).id;
+        gs.players.get_mut(&p3).unwrap().sitting_out = true;
+        // A fourth with no chips.
+        let p4 = gs.add_player("d".into()).id;
+        gs.players.get_mut(&p4).unwrap().chips = 0;
+
+        assert_eq!(gs.dealable_player_count(), 2);
+
+        gs.set_sitting_out(p1);
+        assert_eq!(gs.dealable_player_count(), 1, "sitting-out p1 excluded");
+
+        gs.set_sitting_in(p1);
+        assert_eq!(gs.dealable_player_count(), 2);
+
+        // Removing p2 drops to 1 (p3/p4 never counted).
+        gs.remove_player(p2);
+        assert_eq!(gs.dealable_player_count(), 1);
+        // p1 is still dealable; p3/p4 names are referenced to keep them live.
+        let _ = (p1, p3, p4);
+    }
+
+    /// try_start validates host / player-count / already-started, and on success
+    /// freezes the starting baseline and deals the first hand.
+    #[test]
+    fn test_try_start_errors_and_happy_path() {
+        // --- NotHost: only the host may start. ---
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        let _other = gs.add_player("x".into()).id;
+        gs.host_id = host;
+        assert_eq!(
+            gs.try_start(host.saturating_add(1)),
+            Err(StartGameError::NotHost)
+        );
+        assert!(!gs.game_started, "failed start must not flip game_started");
+
+        // --- NotEnoughPlayers: a lone player can't start. ---
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        gs.host_id = host;
+        assert_eq!(gs.try_start(host), Err(StartGameError::NotEnoughPlayers));
+
+        // --- Happy path: two players, host starts. ---
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        let bb = gs.big_blind;
+        let _p2 = gs.add_player("two".into()).id;
+        gs.host_id = host;
+        gs.starting_bbs = 50;
+
+        gs.try_start(host).expect("host with 2 players may start");
+        assert!(gs.game_started);
+        assert_eq!(gs.phase, GamePhase::PreFlop, "first hand dealt");
+        assert_eq!(gs.hand_number, 1);
+        // starting_chips = starting_bbs * big_blind, frozen at start.
+        assert_eq!(gs.starting_chips, 50 * bb);
+        assert_eq!(gs.starting_big_blind, bb);
+        // Blinds not configured → no anchor set.
+        assert!(gs.last_blind_increase.is_none());
+
+        // --- AlreadyStarted: starting twice is rejected. ---
+        assert_eq!(gs.try_start(host), Err(StartGameError::AlreadyStarted));
+    }
+
+    /// try_start seeds the blind-schedule anchor when rising blinds are on.
+    #[test]
+    fn test_try_start_seeds_blind_anchor() {
+        let mut gs = GameState::new();
+        let host = gs.add_player("host".into()).id;
+        let _p2 = gs.add_player("two".into()).id;
+        gs.host_id = host;
+        gs.blind_config = BlindConfig {
+            interval_secs: 60,
+            increase_percent: 50,
+        };
+        gs.try_start(host).unwrap();
+        assert!(
+            gs.last_blind_increase.is_some(),
+            "anchor seeded when rising blinds configured"
+        );
+    }
+
+    /// apply_settings pre-game rebuys every seated player at the new stack;
+    /// mid-game it ignores starting_bbs and re-anchors the blind schedule.
+    #[test]
+    fn test_apply_settings_pre_game_rebuys_existing_players() {
+        let mut gs = GameState::new();
+        gs.big_blind = 20;
+        gs.starting_bbs = 100;
+        let p1 = gs.add_player("a".into()).id;
+        let p2 = gs.add_player("b".into()).id;
+        // Both seated at the original 100 BB buy-in (100 * 20 = 2000).
+        assert_eq!(gs.players.get(&p1).unwrap().chips, 2000);
+
+        // Host raises the stack to 300 BBs pre-game.
+        let config = BlindConfig {
+            interval_secs: 300,
+            increase_percent: 50,
+        };
+        gs.apply_settings(config, 300);
+
+        assert_eq!(gs.starting_bbs, 300);
+        let new_stack = 300 * 20;
+        assert_eq!(gs.players.get(&p1).unwrap().chips, new_stack);
+        assert_eq!(gs.players.get(&p2).unwrap().chips, new_stack);
+        assert_eq!(gs.blind_config.interval_secs, 300);
+        assert_eq!(gs.blind_config.increase_percent, 50);
+    }
+
+    /// Mid-game, apply_settings must not touch starting_bbs or chips, but must
+    /// re-anchor the blind schedule to ~now.
+    #[test]
+    fn test_apply_settings_mid_game_ignores_stack_and_reanchors() {
+        let mut gs = GameState::new();
+        gs.big_blind = 20;
+        gs.starting_bbs = 200;
+        gs.game_started = true;
+        gs.blind_config = BlindConfig {
+            interval_secs: 60,
+            increase_percent: 50,
+        };
+        // Anchor an hour in the past.
+        gs.last_blind_increase = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap(),
+        );
+        let anchor_before = gs.last_blind_increase;
+        let p1 = gs.add_player_with_chips("a".into(), Some(1000)).id;
+        let chips_before = gs.players.get(&p1).unwrap().chips;
+
+        let config = BlindConfig {
+            interval_secs: 300,
+            increase_percent: 50,
+        };
+        gs.apply_settings(config, 999);
+
+        assert_eq!(gs.starting_bbs, 200, "mid-game stack edit ignored");
+        assert_eq!(
+            gs.players.get(&p1).unwrap().chips,
+            chips_before,
+            "mid-game chips untouched"
+        );
+        assert_eq!(gs.blind_config.interval_secs, 300);
+        assert!(
+            gs.last_blind_increase > anchor_before,
+            "blind schedule re-anchored to ~now"
         );
     }
 }

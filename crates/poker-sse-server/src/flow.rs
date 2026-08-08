@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 
 use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
 use poker_core::poker::Hand;
-use poker_core::protocol::{CardInfo, GameError, PlayerAction, card_to_info};
+use poker_core::protocol::{CardInfo, PlayerAction, card_to_info};
 use tokio::sync::Mutex;
 
 use crate::fanout::{broadcast_state, ctx_of, send_error};
@@ -135,54 +135,13 @@ pub(crate) async fn start_game(ctx: CallerCtx) {
     let mut room = room_arc.lock().await;
     let pid = ctx.player_id;
 
-    if room.game_state.game_started {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            pid,
-            &GameError::GameAlreadyStarted.to_string(),
-        );
+    if let Err(e) = room.game_state.try_start(pid) {
+        send_error(&mut room, &ctx.room_id, pid, &e.to_string());
         return;
     }
-    if room.game_state.player_count() < 2 {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            pid,
-            &GameError::NotEnoughPlayers.to_string(),
-        );
-        return;
-    }
-    if room.game_state.host_id != pid {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            pid,
-            &GameError::NotHost.to_string(),
-        );
-        return;
-    }
-
-    room.game_state.game_started = true;
-
-    // Freeze the starting chip amount and big blind for late entries.
-    room.game_state.starting_big_blind = room.game_state.big_blind;
-    room.game_state.starting_chips = room
-        .game_state
-        .starting_bbs
-        .saturating_mul(room.game_state.big_blind);
-
-    // Initialise the blind increase timer if configured.
-    if room.game_state.blind_config.is_enabled() {
-        room.game_state.last_blind_increase = Some(std::time::Instant::now());
-    }
-
-    // Start the first hand. State regions are rendered once below by
-    // notify_turn_and_start_timer from this settled state.
-    room.game_state.start_new_hand();
 
     // Notify the current player it's their turn, render state, and start the
-    // timer.
+    // timer. State regions are rendered from the settled post-try_start state.
     let sitting_out = notify_turn_and_start_timer(&mut room, &room_arc, &ctx.room_id);
     drop(room);
     if let Some((spid, act)) = sitting_out {
@@ -301,17 +260,7 @@ async fn maybe_start_new_hand(
             return None;
         }
 
-        let active_count = room
-            .game_state
-            .player_order
-            .iter()
-            .filter(|id| {
-                room.game_state
-                    .players
-                    .get(id)
-                    .is_some_and(|p| !p.sitting_out && p.chips > 0)
-            })
-            .count();
+        let active_count = room.game_state.dealable_player_count();
 
         if active_count >= 2 {
             room.game_state.waiting_for_players = false;
@@ -338,19 +287,7 @@ async fn maybe_start_new_hand(
         return None;
     }
 
-    let active_count = room
-        .game_state
-        .player_order
-        .iter()
-        .filter(|id| {
-            room.game_state
-                .players
-                .get(id)
-                .is_some_and(|p| !p.sitting_out && p.chips > 0)
-        })
-        .count();
-
-    if active_count < 2 {
+    if room.game_state.dealable_player_count() < 2 {
         room.game_state.waiting_for_players = true;
         broadcast_state(&mut room, room_id);
         return None;
