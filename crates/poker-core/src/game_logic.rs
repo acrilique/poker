@@ -22,12 +22,13 @@
 //! up to a concrete connection.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::poker::{Board, Card, Hand, get_all_cards};
-use crate::protocol::{BlindConfig, PlayerAction};
+use crate::poker::{Board, Card, FullHand, Hand, best_hand_indices, get_all_cards};
 use rand::rng;
 use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 
 /// Fixed per-turn timer duration in seconds.
 ///
@@ -39,6 +40,59 @@ pub const TURN_TIMEOUT_SECS: u32 = 30;
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/// An action the player can take during a betting round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayerAction {
+    Fold,
+    Check,
+    Call,
+    Raise,
+    #[serde(rename = "allin")]
+    AllIn,
+}
+
+impl PlayerAction {
+    /// Human-readable label for UI display.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fold => "Fold",
+            Self::Check => "Check",
+            Self::Call => "Call",
+            Self::Raise => "Raise",
+            Self::AllIn => "All-In",
+        }
+    }
+}
+
+impl fmt::Display for PlayerAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Configuration for automatic blind increases.
+///
+/// When `interval_secs` is 0 (or `None` on the wire) blinds never increase.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct BlindConfig {
+    /// Seconds between each blind increase (0 = disabled).
+    #[serde(default)]
+    pub interval_secs: u64,
+    /// Percentage by which blinds increase each interval (e.g. 50 = +50%).
+    #[serde(default)]
+    pub increase_percent: u32,
+}
+
+impl BlindConfig {
+    /// Returns `true` when blind increases are enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.interval_secs > 0 && self.increase_percent > 0
+    }
+}
 
 /// Player status in current hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,13 +240,24 @@ impl Default for GameState {
 
 /// `(base + offset) mod seats`, computed with checked arithmetic so it can't
 /// overflow or divide by zero. Returns `0` when `seats == 0`.
-const fn next_seat(base: usize, offset: usize, seats: usize) -> usize {
+///
+/// Public so the transport can derive seat positions (blinds, dealer) from
+/// the same arithmetic the engine uses.
+#[must_use]
+pub const fn next_seat(base: usize, offset: usize, seats: usize) -> usize {
     if seats == 0 {
         return 0;
     }
     base.rem_euclid(seats)
         .saturating_add(offset)
         .rem_euclid(seats)
+}
+
+/// One blind-level step: `cur` increased by `pct`%, rounded up to the next
+/// chip. Shared by [`GameState::start_new_hand`]'s catch-up loop and
+/// [`GameState::next_blinds`] so the two blind schedules can't drift.
+const fn next_blind_level(cur: u32, pct: u32) -> u32 {
+    cur.saturating_add(cur.saturating_mul(pct).div_ceil(100))
 }
 
 impl GameState {
@@ -331,6 +396,30 @@ impl GameState {
             .count()
     }
 
+    /// The player's hole cards as a [`Hand`], if they have any.
+    #[must_use]
+    pub fn hand_of(&self, player_id: u32) -> Option<Hand> {
+        let (c1, c2) = self.players.get(&player_id)?.hole_cards?;
+        Some(Hand(c1, c2))
+    }
+
+    /// The hands still in play: `(player_id, Hand)` for every Active/AllIn
+    /// player with hole cards, in seat order. Shared by the engine's
+    /// [`Self::resolve_hand`] and the transport's showdown renderers so the
+    /// "collect live hands" pattern lives in one place.
+    #[must_use]
+    pub fn live_hands(&self) -> Vec<(u32, Hand)> {
+        self.player_order
+            .iter()
+            .filter(|&&id| {
+                self.players
+                    .get(&id)
+                    .is_some_and(|p| matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn))
+            })
+            .filter_map(|&id| self.hand_of(id).map(|hand| (id, hand)))
+            .collect()
+    }
+
     /// Shuffle and create a new deck.
     pub fn new_deck(&mut self) {
         self.deck = get_all_cards().to_vec();
@@ -390,12 +479,8 @@ impl GameState {
             let interval = Duration::from_secs(self.blind_config.interval_secs);
             let pct = self.blind_config.increase_percent;
             while last.elapsed() >= interval {
-                self.small_blind = self
-                    .small_blind
-                    .saturating_add(self.small_blind.saturating_mul(pct).div_ceil(100));
-                self.big_blind = self
-                    .big_blind
-                    .saturating_add(self.big_blind.saturating_mul(pct).div_ceil(100));
+                self.small_blind = next_blind_level(self.small_blind, pct);
+                self.big_blind = next_blind_level(self.big_blind, pct);
                 // Advance the anchor by exactly one interval to stay anchored
                 // to game start. `checked_add` is None only near a
                 // monotonically-distant future; in that case stop.
@@ -726,7 +811,10 @@ impl GameState {
 
     /// Find the winner(s) of a pot among a set of eligible player hands.
     ///
-    /// Returns the winning player IDs and the hand rank description.
+    /// Returns the winning player IDs and the hand rank description. Winner
+    /// selection reuses [`best_hand_indices`] (`poker-core::poker`) — the same
+    /// single-pass, ties-kept-all semantics as the equity simulator — instead
+    /// of a hand-rolled pairwise loop.
     fn find_pot_winners(
         hands: &[(u32, Hand)],
         eligible: &[u32],
@@ -742,33 +830,24 @@ impl GameState {
             return (vec![id], "Winner".to_string());
         }
 
-        let mut winning_ids: Vec<u32> = Vec::new();
-        let mut best_rank = String::new();
+        // Evaluate every eligible hand; hands with no 5-card combination are
+        // dropped (they can't win). `best` always succeeds here because
+        // `resolve_hand` only runs on a full board, but keep it defensive.
+        let ranked: Vec<(u32, FullHand)> = eligible_hands
+            .iter()
+            .filter_map(|(id, hand)| hand.best(board).map(|full| (*id, full)))
+            .collect();
 
-        for (id_i, hand_i) in &eligible_hands {
-            let full_i = hand_i.best(board);
-            let mut is_winner = true;
-
-            for (id_j, hand_j) in &eligible_hands {
-                if id_i == id_j {
-                    continue;
-                }
-                if let (Some(fi), Some(fj)) = (&full_i, &hand_j.best(board)) {
-                    use crate::poker::Winner;
-                    if fi.compare(fj) == Winner::Hand2 {
-                        is_winner = false;
-                        break;
-                    }
-                }
-            }
-
-            if is_winner {
-                if let Some(full) = &full_i {
-                    best_rank = format!("{}", full.rank());
-                }
-                winning_ids.push(*id_i);
-            }
+        if ranked.is_empty() {
+            return (Vec::new(), String::new());
         }
+
+        let winning_ids = best_hand_indices(&ranked);
+        // All winners tie, so any winner's rank is the winning rank.
+        let best_rank = winning_ids
+            .first()
+            .and_then(|wid| ranked.iter().find(|(id, _)| id == wid))
+            .map_or_else(String::new, |(_, full)| format!("{}", full.rank()));
 
         (winning_ids, best_rank)
     }
@@ -800,16 +879,7 @@ impl GameState {
 
     /// Determine winner(s) and distribute pot using side-pot logic.
     pub fn resolve_hand(&mut self) {
-        let mut hands_to_show: Vec<(u32, Hand)> = Vec::new();
-
-        for &id in &self.player_order {
-            if let Some(player) = self.players.get(&id)
-                && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
-                && let Some((c1, c2)) = player.hole_cards
-            {
-                hands_to_show.push((id, Hand(c1, c2)));
-            }
-        }
+        let hands_to_show = self.live_hands();
 
         if hands_to_show.is_empty() {
             return;
@@ -914,14 +984,15 @@ impl GameState {
         Board { flop, turn, river }
     }
 
-    /// The next blind level, computed with the same `increase_percent` and
-    /// `div_ceil` rounding the [`Self::start_new_hand`] bump uses. Returns the
-    /// current level unchanged when rising blinds aren't configured.
+    /// The next blind level, computed via the shared [`next_blind_level`] step.
+    /// Returns the current level unchanged when rising blinds aren't configured.
     #[must_use]
-    pub fn next_blinds(&self) -> (u32, u32) {
+    pub const fn next_blinds(&self) -> (u32, u32) {
         let pct = self.blind_config.increase_percent;
-        let next = |cur: u32| cur.saturating_add(cur.saturating_mul(pct).div_ceil(100));
-        (next(self.small_blind), next(self.big_blind))
+        (
+            next_blind_level(self.small_blind, pct),
+            next_blind_level(self.big_blind, pct),
+        )
     }
 
     /// Seconds remaining until the next blind increase, anchored to

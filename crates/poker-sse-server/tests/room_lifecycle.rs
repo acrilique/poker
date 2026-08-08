@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use poker_core::protocol::BlindConfig;
+use poker_core::game_logic::BlindConfig;
 use poker_sse_server::AppState;
 use poker_sse_server::room::{LeaveOutcome, RoomManager};
 

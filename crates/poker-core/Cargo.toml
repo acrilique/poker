@@ -2,7 +2,7 @@
 name = "poker-core"
 version = "0.1.0"
 edition = "2024"
-description = "Shared poker types: card evaluation, hand ranking, and wire protocol"
+description = "Shared poker engine: card evaluation, hand ranking, and game logic"
 license = "MIT"
 
 [dependencies]

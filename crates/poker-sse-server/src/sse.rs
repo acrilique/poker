@@ -33,7 +33,7 @@ use datastar::axum::ReadSignals;
 use futures_util::{Stream, StreamExt};
 
 use crate::AppState;
-use crate::handlers::SessionSignals;
+use crate::handlers::{SessionSignals, events_response};
 use crate::render;
 use crate::room::{RoomManager, resolve_caller};
 
@@ -102,11 +102,7 @@ pub async fn events(
             evs.push(render::patch_signals(
                 &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
             ));
-            let stream = futures_util::stream::iter(
-                evs.into_iter()
-                    .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
-            );
-            return Sse::new(stream).into_response();
+            return events_response(evs);
         }
     };
 
@@ -120,15 +116,7 @@ pub async fn events(
         manager.remove_room(&room_id).await;
         // Notify via alert, then blank the session signals; pokerHandleFetch
         // clears localStorage.
-        let mut evs = render::notice_events("This game has ended. Thanks for playing!");
-        evs.push(render::patch_signals(
-            &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
-        ));
-        let stream = futures_util::stream::iter(
-            evs.into_iter()
-                .map(|ev| Ok::<_, std::convert::Infallible>(ev.write_as_axum_sse_event())),
-        );
-        return Sse::new(stream).into_response();
+        return events_response(render::game_over_events());
     }
 
     let (rx, initial, generation) =

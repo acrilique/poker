@@ -28,9 +28,8 @@ use askama::Template;
 use datastar::DatastarEvent;
 use datastar::consts::ElementPatchMode;
 use datastar::prelude::{PatchElements, PatchSignals};
-use poker_core::protocol::{CardInfo, PlayerAction};
-
-use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
+use poker_core::game_logic::{GamePhase, GameState, PlayerAction, PlayerStatus, next_seat};
+use poker_core::poker::Card;
 
 // ---------------------------------------------------------------------------
 // View structs shared between render code and Askama templates
@@ -42,11 +41,11 @@ pub struct CardView {
     pub red: bool,
 }
 
-impl From<&CardInfo> for CardView {
-    fn from(c: &CardInfo) -> Self {
+impl From<&Card> for CardView {
+    fn from(c: &Card) -> Self {
         Self {
             label: c.to_string(),
-            red: c.suit == 0 || c.suit == 3, // Diamonds / Hearts
+            red: c.suit().value() == 0 || c.suit().value() == 3, // Diamonds / Hearts
         }
     }
 }
@@ -415,17 +414,13 @@ fn seat_blind(gs: &GameState, pid: u32) -> Blind {
     }
 }
 
-/// `(base + offset) % seats`, computed without overflowing arithmetic and
-/// without indexing the seat vector.
+/// Seat lookup via the engine's shared [`next_seat`] arithmetic (`poker-core`),
+/// then read the player ID sitting there (`None` when the table is empty).
 fn seat_at(gs: &GameState, base: usize, offset: usize, seats: usize) -> Option<u32> {
     if seats == 0 {
         return None;
     }
-    let idx = base
-        .rem_euclid(seats)
-        .saturating_add(offset)
-        .rem_euclid(seats);
-    gs.player_order.get(idx).copied()
+    gs.player_order.get(next_seat(base, offset, seats)).copied()
 }
 
 fn render_player_list(ctx: &Ctx, viewer: u32) -> String {
@@ -458,8 +453,8 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
     let mut community: Vec<Option<CardView>> = gs
         .community_cards
         .iter()
-        .map(poker_core::protocol::card_to_info)
-        .map(|c| Some(CardView::from(&c)))
+        .map(CardView::from)
+        .map(Some)
         .collect();
     while community.len() < 5 {
         community.push(None);
@@ -497,33 +492,16 @@ fn table_html(ctx: &Ctx, showdown: Vec<ShowdownHand>) -> String {
 fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
     // A genuine showdown needs at least two players still in (Active/AllIn).
     // Fewer means everyone else folded — a walkover — so don't reveal anything.
-    let eligible_count = gs
-        .player_order
-        .iter()
-        .filter(|&&pid| {
-            gs.players
-                .get(&pid)
-                .is_some_and(|p| matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn))
-        })
-        .count();
-    if eligible_count < 2 {
+    let live = gs.live_hands();
+    if live.len() < 2 {
         return Vec::new();
     }
 
     let board = gs.build_board();
-    gs.player_order
-        .iter()
-        .filter_map(|&pid| {
+    live.into_iter()
+        .filter_map(|(pid, hand)| {
             let p = gs.players.get(&pid)?;
-            if !matches!(p.status, PlayerStatus::Active | PlayerStatus::AllIn) {
-                return None;
-            }
-            let (c1, c2) = p.hole_cards?;
-            let cards = vec![
-                CardView::from(&poker_core::protocol::card_to_info(&c1)),
-                CardView::from(&poker_core::protocol::card_to_info(&c2)),
-            ];
-            let hand = poker_core::poker::Hand(c1, c2);
+            let cards = vec![CardView::from(&hand.0), CardView::from(&hand.1)];
             let line1 = hand
                 .best(&board)
                 .map(|full| format!("{}", full.rank()))
@@ -547,28 +525,21 @@ fn build_showdown_overlay(gs: &GameState, viewer: u32) -> Vec<ShowdownHand> {
 
 fn render_hole_cards(gs: &GameState, viewer: u32) -> String {
     let cards = gs
-        .players
-        .get(&viewer)
-        .and_then(|p| p.hole_cards)
-        .map(|(c1, c2)| {
-            vec![
-                CardView::from(&poker_core::protocol::card_to_info(&c1)),
-                CardView::from(&poker_core::protocol::card_to_info(&c2)),
-            ]
-        });
+        .hand_of(viewer)
+        .map(|hand| vec![CardView::from(&hand.0), CardView::from(&hand.1)]);
     let hand_rank = hole_hand_rank(gs, viewer);
     render_or_log(HoleCardsTpl { cards, hand_rank }, "hole_cards")
 }
 
 /// Compute the player's current made-hand rank (hole cards + board).
 fn hole_hand_rank(gs: &GameState, viewer: u32) -> Option<String> {
-    let (c1, c2) = gs.players.get(&viewer)?.hole_cards?;
     if gs.community_cards.len() < 3 {
         return None;
     }
     let board = gs.build_board();
-    let hand = poker_core::poker::Hand(c1, c2);
-    hand.best(&board).map(|full| format!("{}", full.rank()))
+    gs.hand_of(viewer)
+        .and_then(|hand| hand.best(&board))
+        .map(|full| format!("{}", full.rank()))
 }
 
 fn render_action_bar(gs: &GameState, viewer: u32) -> String {
@@ -729,6 +700,18 @@ pub fn notice_events(detail: &str) -> Vec<DatastarEvent> {
     toast_events(detail)
 }
 
+/// The "game has ended" notice plus blanked session signals, pushed to every
+/// live stream when a room finishes. Shared by the post-action cleanup
+/// (`handlers::maybe_cleanup_after_action`) and the attach-time teardown
+/// (`sse::events`) so the pair can't drift.
+pub fn game_over_events() -> Vec<DatastarEvent> {
+    let mut evs = notice_events("This game has ended. Thanks for playing!");
+    evs.push(patch_signals(
+        &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
+    ));
+    evs
+}
+
 /// Append a one-shot `<div data-init="@get('/poker/events')">` to `<body>`.
 ///
 /// The create/join response patches the session signals in *first*, then
@@ -763,7 +746,7 @@ pub fn attach_events_stream_trigger() -> Vec<DatastarEvent> {
 pub fn equity_table_events(
     ctx: &Ctx,
     viewer: u32,
-    hands_with_equity: &[(u32, [CardInfo; 2], f64)],
+    hands_with_equity: &[(u32, [Card; 2], f64)],
 ) -> DatastarEvent {
     let overlay: Vec<ShowdownHand> = hands_with_equity
         .iter()

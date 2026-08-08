@@ -27,8 +27,7 @@ use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use poker_core::game_logic::StartGameError;
-use poker_core::protocol::{BlindConfig, PlayerAction};
+use poker_core::game_logic::{BlindConfig, PlayerAction, StartGameError};
 use serde::Deserialize;
 
 use crate::fanout::{broadcast_state, render_full_snapshot, send_error};
@@ -383,8 +382,10 @@ async fn join_common(state: AppState, room_id: String, name: String) -> axum::re
     }
 }
 
-/// Render events into a short-lived SSE response (for POST handlers).
-fn events_response(events: Vec<datastar::DatastarEvent>) -> axum::response::Response {
+/// Render events into a short-lived SSE response (for POST handlers). Also
+/// used by the SSE attach path (`sse::events`) for its one-shot error/teardown
+/// responses.
+pub(crate) fn events_response(events: Vec<datastar::DatastarEvent>) -> axum::response::Response {
     let stream = futures_util::stream::iter(
         events
             .into_iter()
@@ -607,10 +608,7 @@ async fn maybe_cleanup_after_action(state: &AppState, ctx: &CallerCtx) {
         room.game_over = true;
         // Surface the notice and blank session signals on every connected
         // client now, not on the next attach.
-        let mut evs = render::notice_events("This game has ended. Thanks for playing!");
-        evs.push(render::patch_signals(
-            &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
-        ));
+        let evs = render::game_over_events();
         let per_viewer: Vec<u32> = room.players.keys().copied().collect();
         let mut fan = Fanout::new(&mut room);
         for viewer in per_viewer {

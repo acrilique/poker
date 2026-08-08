@@ -28,9 +28,8 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use poker_core::game_logic::{GamePhase, PlayerStatus, TURN_TIMEOUT_SECS};
-use poker_core::poker::Hand;
-use poker_core::protocol::{CardInfo, PlayerAction, card_to_info};
+use poker_core::game_logic::{GamePhase, PlayerAction, TURN_TIMEOUT_SECS};
+use poker_core::poker::{Card, Hand};
 use tokio::sync::Mutex;
 
 use crate::fanout::{broadcast_state, ctx_of, send_error};
@@ -478,16 +477,10 @@ async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
     // --- 1. Extract data while holding the lock (cheap) ----------------
     let (player_hands, hands_for_calc, board) = {
         let room = room_arc.lock().await;
-        let mut player_hands: Vec<(u32, [CardInfo; 2], Hand)> = Vec::new();
+        let mut player_hands: Vec<(u32, [Card; 2], Hand)> = Vec::new();
 
-        for &id in &room.game_state.player_order {
-            if let Some(player) = room.game_state.players.get(&id)
-                && (player.status == PlayerStatus::Active || player.status == PlayerStatus::AllIn)
-                && let Some((c1, c2)) = player.hole_cards
-            {
-                let cards = [card_to_info(&c1), card_to_info(&c2)];
-                player_hands.push((id, cards, Hand(c1, c2)));
-            }
+        for (id, hand) in room.game_state.live_hands() {
+            player_hands.push((id, [hand.0, hand.1], hand));
         }
 
         if player_hands.len() < 2 {
@@ -519,7 +512,7 @@ async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
     };
 
     // --- 3. Re-acquire the lock and broadcast the result ---------------
-    let hands_with_equity: Vec<(u32, [CardInfo; 2], f64)> = player_hands
+    let hands_with_equity: Vec<(u32, [Card; 2], f64)> = player_hands
         .iter()
         .enumerate()
         .map(|(i, (id, cards, _))| (*id, *cards, equities.get(i).copied().unwrap_or(0.0)))

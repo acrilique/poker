@@ -48,9 +48,8 @@ impl CardSuit {
     /// All suits in standard order
     pub const ALL: [Self; 4] = [Self::Diamonds, Self::Spades, Self::Clubs, Self::Hearts];
 
-    /// Numeric index of the suit (0–3), matching the wire-protocol encoding
-    /// used by [`CardInfo`](crate::protocol::CardInfo) (Diamonds=0, Spades=1,
-    /// Clubs=2, Hearts=3).
+    /// Numeric index of the suit (0–3): Diamonds=0, Spades=1, Clubs=2,
+    /// Hearts=3.
     #[must_use]
     pub const fn value(self) -> u8 {
         match self {
@@ -159,7 +158,7 @@ impl CardNumber {
             Self::Seven => "7",
             Self::Eight => "8",
             Self::Nine => "9",
-            Self::Ten => "T",
+            Self::Ten => "10",
             Self::Jack => "J",
             Self::Queen => "Q",
             Self::King => "K",
@@ -1019,9 +1018,13 @@ fn build_sim_board(board: &Board, deck: &[Card], start: usize) -> (Board, usize)
     )
 }
 
-/// Given `(hand_index, FullHand)` pairs, return the indices of the best hand(s).
-/// Ties produce multiple indices.
-fn find_best_indices(best_hands: &[(usize, FullHand)]) -> Vec<usize> {
+/// Given `(id, FullHand)` pairs, return the ids of the best hand(s). Ties
+/// produce multiple ids.
+///
+/// Single-pass (O(n)): keeps the current best and replaces it only when a
+/// strictly better hand is found. Shared by the equity simulator and the
+/// engine's side-pot winner selection (`game_logic::find_pot_winners`).
+pub fn best_hand_indices<T: Copy>(best_hands: &[(T, FullHand)]) -> Vec<T> {
     let mut winner_indices = Vec::new();
     let Some(&(first_idx, first_hand)) = best_hands.first() else {
         return winner_indices;
@@ -1223,7 +1226,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
         }
 
         // Find the best hand(s)
-        winner_indices = find_best_indices(&best_hands);
+        winner_indices = best_hand_indices(&best_hands);
 
         if winner_indices.len() == 1
             && let Some(&idx) = winner_indices.first()
@@ -1278,7 +1281,7 @@ mod tests {
         assert_eq!(format!("{card}"), "A♠");
 
         let card = c(CardNumber::Ten, CardSuit::Hearts);
-        assert_eq!(format!("{card}"), "T♥");
+        assert_eq!(format!("{card}"), "10♥");
 
         let card = c(CardNumber::Two, CardSuit::Diamonds);
         assert_eq!(format!("{card}"), "2♦");

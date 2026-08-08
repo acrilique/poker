@@ -27,12 +27,11 @@ use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use datastar::DatastarEvent;
-use poker_core::protocol::{BlindConfig, RoomIdError, validate_room_id};
+use poker_core::game_logic::{BlindConfig, GameState};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::render;
-use poker_core::game_logic::GameState;
 
 /// The active-rooms map. Each room is individually `Mutex`-protected so
 /// independent rooms never contend; the outer `RwLock` gates create / remove.
@@ -59,6 +58,41 @@ const MAX_ACTIVE_ROOMS: usize = 100;
 /// Maximum number of outbound SSE events buffered per player before the
 /// connection is considered too slow and the sender is dropped.
 const PLAYER_CHANNEL_CAPACITY: usize = 256;
+
+/// Errors that can occur when validating a room ID.
+#[derive(Debug, Clone, Error)]
+pub enum RoomIdError {
+    #[error("Room ID cannot be empty")]
+    Empty,
+
+    #[error("Room ID must be fewer than 20 characters")]
+    TooLong,
+
+    #[error("Room ID must be alphanumeric")]
+    InvalidChars,
+}
+
+/// Validate a room ID.
+///
+/// Room IDs must be non-empty, alphanumeric, and fewer than 20 characters.
+///
+/// # Errors
+///
+/// Returns [`RoomIdError::Empty`] if `id` is empty, [`RoomIdError::TooLong`]
+/// if it has 20 or more characters, or [`RoomIdError::InvalidChars`] if it
+/// contains any non-ASCII-alphanumeric character.
+pub fn validate_room_id(id: &str) -> Result<(), RoomIdError> {
+    if id.is_empty() {
+        return Err(RoomIdError::Empty);
+    }
+    if id.len() >= 20 {
+        return Err(RoomIdError::TooLong);
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(RoomIdError::InvalidChars);
+    }
+    Ok(())
+}
 
 /// Errors returned by [`RoomManager`] operations.
 #[derive(Debug, Error)]
@@ -757,4 +791,26 @@ pub async fn resolve_caller(
         player_id: pid,
         room_id: room_id.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_room_ids() {
+        assert!(validate_room_id("abc123").is_ok());
+        assert!(validate_room_id("A").is_ok());
+        assert!(validate_room_id("Room42").is_ok());
+        assert!(validate_room_id("1234567890123456789").is_ok()); // 19 chars
+    }
+
+    #[test]
+    fn invalid_room_ids() {
+        assert!(validate_room_id("").is_err());
+        assert!(validate_room_id("12345678901234567890").is_err()); // 20 chars
+        assert!(validate_room_id("hello world").is_err());
+        assert!(validate_room_id("room-1").is_err());
+        assert!(validate_room_id("room_1").is_err());
+    }
 }

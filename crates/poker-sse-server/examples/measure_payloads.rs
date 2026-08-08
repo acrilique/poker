@@ -28,9 +28,9 @@ use brotli::CompressorReader as BrotliEncoder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
+use poker_core::game_logic::BlindConfig;
 use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
 use poker_core::poker::{Card, CardNumber, CardSuit};
-use poker_core::protocol::BlindConfig;
 use poker_sse_server::render::{self, Ctx};
 
 /// Serialize one Datastar event to the SSE wire format. Reproduces the format
