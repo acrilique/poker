@@ -60,6 +60,12 @@ impl CardSuit {
         }
     }
 
+    /// Whether the suit renders red (Diamonds or Hearts) in a UI.
+    #[must_use]
+    pub const fn is_red(self) -> bool {
+        matches!(self, Self::Diamonds | Self::Hearts)
+    }
+
     /// Returns the suit as a display symbol
     #[must_use]
     pub const fn symbol(&self) -> &'static str {
@@ -1285,6 +1291,14 @@ mod tests {
 
         let card = c(CardNumber::Two, CardSuit::Diamonds);
         assert_eq!(format!("{card}"), "2♦");
+    }
+
+    #[test]
+    fn card_suit_is_red() {
+        assert!(CardSuit::Diamonds.is_red());
+        assert!(CardSuit::Hearts.is_red());
+        assert!(!CardSuit::Spades.is_red());
+        assert!(!CardSuit::Clubs.is_red());
     }
 
     #[test]

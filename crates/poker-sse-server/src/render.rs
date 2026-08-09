@@ -45,7 +45,7 @@ impl From<&Card> for CardView {
     fn from(c: &Card) -> Self {
         Self {
             label: c.to_string(),
-            red: c.suit().value() == 0 || c.suit().value() == 3, // Diamonds / Hearts
+            red: c.suit().is_red(),
         }
     }
 }
