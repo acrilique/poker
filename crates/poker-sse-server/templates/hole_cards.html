@@ -1,9 +1,10 @@
+{% import "macros.html" as ui %}
 <div id="hole-cards" class="hole-cards">
   <div class="hole-cards-inner">
     <div class="hole-card-row">
       {% if let Some(cards) = cards %}
         {% for card in cards %}
-        <div class="card {% if card.red %}suit-red{% else %}suit-black{% endif %}"><span>{{ card.label }}</span></div>
+        {{ ui::card(card) }}
         {% endfor %}
       {% else %}
         <div class="card-back"><span>♠</span></div>

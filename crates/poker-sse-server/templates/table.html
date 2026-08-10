@@ -1,3 +1,4 @@
+{% import "macros.html" as ui %}
 <div id="table" class="table">
   <div class="table-meta">
     <div class="room-chip" title="Room ID — click to select">Room: <span class="select-all">{{ room_id }}</span></div>
@@ -19,7 +20,7 @@
   <div class="community-cards">
     {% for c in community %}
       {% if let Some(card) = c %}
-      <div class="card {% if card.red %}suit-red{% else %}suit-black{% endif %}"><span>{{ card.label }}</span></div>
+      {{ ui::card(card) }}
       {% else %}
       <div class="card-empty"><span>?</span></div>
       {% endif %}
@@ -36,7 +37,7 @@
       <span class="showdown-name {% if h.is_us %}showdown-name-us{% endif %}">{{ h.name }}</span>
       <div class="showdown-cards">
         {% for card in h.cards %}
-        <div class="card card-sm {% if card.red %}suit-red{% else %}suit-black{% endif %}"><span>{{ card.label }}</span></div>
+        {{ ui::card(card, small = true) }}
         {% endfor %}
       </div>
       {% if let Some(l1) = h.line1 %}<span class="showdown-line">{{ l1 }}</span>{% endif %}

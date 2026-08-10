@@ -1,4 +1,5 @@
 <!doctype html>
+{% import "macros.html" as ui %}
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -43,21 +44,9 @@
             <details class="host-settings">
               <summary>Host settings</summary>
               <div class="host-inputs">
-                <label class="field">
-                  <span>Initial stack</span>
-                  <input type="number" min="1" data-bind:stackbbs>
-                  <small>BBs per player</small>
-                </label>
-                <label class="field">
-                  <span>Blind interval</span>
-                  <input type="number" min="0" placeholder="0" data-bind:blindmins>
-                  <small>Minutes</small>
-                </label>
-                <label class="field">
-                  <span>Blind rise</span>
-                  <input type="number" min="0" placeholder="0" data-bind:blindpct>
-                  <small>Percent</small>
-                </label>
+                {{ ui::stack_field() }}
+                {{ ui::blind_interval_field(placeholder = Some("0".to_string())) }}
+                {{ ui::blind_rise_field(placeholder = Some("0".to_string())) }}
               </div>
             </details>
           </div>
