@@ -144,25 +144,39 @@ function pokerBlindsTick() {
 }
 
 // Drive the active-turn player's countdown ring.
+let _ringEl = null;
+let _ringRafId = 0;
+
+function pokerTurnFrame() {
+  const el = _ringEl;
+  if (!el || !el.isConnected || !el.hasAttribute("data-turn-deadline")) {
+    _ringEl = null; // turn ended or row morphed away — stop the loop
+    _ringRafId = 0;
+    return;
+  }
+  const deadline = parseInt(el.getAttribute("data-turn-deadline"), 10);
+  if (!Number.isFinite(deadline)) {
+    el.style.setProperty("--timer-angle", "360deg");
+    _ringEl = null;
+    _ringRafId = 0;
+    return;
+  }
+  // remaining/total → angle (full ring at the start, empty at the deadline).
+  // Fractional degrees: no rounding, so the sweep stays continuous.
+  const frac =
+    Math.max(0, deadline - Date.now()) / (POKER_TURN_TOTAL_SECS * 1000);
+  el.style.setProperty("--timer-angle", 360 * frac + "deg");
+  _ringRafId = requestAnimationFrame(pokerTurnFrame);
+}
+
+// Polled from the shared interval: picks up the ring element when a turn
+// starts and (re)starts the frame loop; also refreshes `_ringEl` after morphs
+// so the loop follows the live row.
 function pokerTurnTick() {
   const el = document.querySelector(".timer-border[data-turn-deadline]");
   if (!el) return;
-  const raw = el.getAttribute("data-turn-deadline") || "";
-  if (!raw) {
-    el.style.setProperty("--timer-angle", "360deg");
-    return;
-  }
-  const deadline = parseInt(raw, 10);
-  if (!Number.isFinite(deadline)) {
-    el.style.setProperty("--timer-angle", "360deg");
-    return;
-  }
-  const totalMs = POKER_TURN_TOTAL_SECS * 1000;
-  const remainingMs = Math.max(0, deadline - Date.now());
-  // remaining/total → angle (full ring at the start, empty at the deadline).
-  const frac = totalMs > 0 ? remainingMs / totalMs : 0;
-  const deg = Math.round(360 * frac);
-  el.style.setProperty("--timer-angle", deg + "deg");
+  _ringEl = el;
+  if (!_ringRafId) _ringRafId = requestAnimationFrame(pokerTurnFrame);
 }
 
 function pokerCountdownTick() {
@@ -171,11 +185,11 @@ function pokerCountdownTick() {
 }
 
 // Start the shared interval once per tab. Guarded so repeated inits (e.g. a
-// reconnect morph) can't stack intervals.
+// reconnect morph) can't stack intervals. 250ms suits the seconds-precision
+// blinds text; the ring runs at frame rate via its own rAF loop.
 function pokerCountdownStart() {
   if (_countdownStarted) return;
   _countdownStarted = true;
-  // 250ms is smooth for a seconds-precision display and cheap on idle.
   setInterval(pokerCountdownTick, 250);
   pokerCountdownTick();
 }
