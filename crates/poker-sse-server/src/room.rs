@@ -353,8 +353,8 @@ impl RoomManager {
     /// Add a player to a room.
     ///
     /// Returns `(player_id, session_token, Arc<Mutex<Room>>)` on success.
-    /// Unlike the WS server no channel is created here — that happens when
-    /// the player's SSE stream attaches.
+    /// No channel is created here — that happens when the player's SSE stream
+    /// attaches.
     pub async fn join_room(
         &self,
         room_id: &str,

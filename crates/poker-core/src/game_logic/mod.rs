@@ -18,8 +18,7 @@
 //! Server-side game logic: types, state management, and betting rules.
 //!
 //! This module is transport-agnostic — it knows nothing about TCP, channels,
-//! or serialization. The transport layer (WebSocket or SSE server) wires it
-//! up to a concrete connection.
+//! or serialization.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -48,9 +47,9 @@ pub const TURN_TIMEOUT_SECS: u32 = 30;
 ///
 /// The five independent boolean flags (`game_started`, `big_blind_option`,
 /// `has_acted_this_round`, `allow_late_entry`, `waiting_for_players`) are each
-/// semantically distinct engine state accessed directly at ~100 sites across
-/// both transports; grouping them would obscure the state machine without a
-/// correctness benefit, so the bool cap is relaxed here.
+/// semantically distinct engine state accessed directly at ~100 sites;
+/// grouping them would obscure the state machine without a correctness
+/// benefit, so the bool cap is relaxed here.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GameState {
     pub players: HashMap<u32, Player>,
@@ -211,7 +210,7 @@ impl GameState {
             return None;
         }
         // player_order holds remaining players; pick the lowest id for
-        // deterministic promotion across transports.
+        // deterministic promotion.
         let next = *self.player_order.iter().min()?;
         self.host_id = next;
         Some(next)
@@ -257,14 +256,8 @@ impl GameState {
     /// `game_started = false` and `phase = Lobby` only in [`resolve_hand`],
     /// once a single player holds all the chips. A game that never started
     /// (`hand_number == 0`) is not "over".
-    #[allow(
-        dead_code,
-        reason = "used by the poker-sse-server crate; the WS server has no equivalent call site yet"
-    )]
     #[must_use]
     pub const fn is_game_over(&self) -> bool {
-        // Note: no call site lives inside poker-core itself; both server crates
-        // consume this from their transport layers.
         !self.game_started && matches!(self.phase, GamePhase::Lobby) && self.hand_number > 0
     }
 
@@ -1010,10 +1003,6 @@ impl GameState {
     /// state, then advance the turn. Does **not** drive the post-action state
     /// machine (phase advance, hand resolution, next hand) — that's the caller's
     /// job, since it needs transport-side fanout and timers between steps.
-    ///
-    /// This centralises the betting rules that the SSE server previously held
-    /// inline (and that the WS server duplicated), so both transports now share
-    /// one source of truth for chip/bet/pot mutation.
     ///
     /// # Errors
     /// Returns [`ActionError`] when the action is illegal right now (game not

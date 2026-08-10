@@ -194,9 +194,6 @@ impl Card {
     }
 }
 
-#[allow(dead_code)]
-pub struct Deck(pub [Card; 52]);
-
 /// Represents the community cards on the board.
 ///
 /// The board can have up to 5 cards:
