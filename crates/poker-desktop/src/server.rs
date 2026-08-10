@@ -22,31 +22,23 @@
 use std::path::Path;
 
 use local_ip_address::local_ip;
-use poker_sse_server::{CorsConfig, ServerConfig, run};
+use poker_sse_server::{ServerConfig, run};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Resolve the directory holding `poker-sse-server`'s `static/` assets.
+/// The sibling crate's committed `static/` directory, when it exists.
 ///
 /// When run via `cargo run` / a debug build, the process CWD is the workspace
-/// root and the SSE server's default `"static"` lookup fails, so we fall back
-/// to the sibling crate's committed `static/` directory. `STATIC_DIR` still
-/// wins, matching the standalone server.
-fn resolve_static_dir() -> String {
-    if let Ok(dir) = std::env::var("STATIC_DIR") {
-        return dir;
-    }
+/// root and the SSE server's default `"static"` lookup fails, so we prefer
+/// `poker-sse-server/static` when it's present. `STATIC_DIR` (via
+/// [`ServerConfig::from_env`]) still wins, matching the standalone server.
+fn sibling_static_dir() -> Option<String> {
     // `<crate root of poker-desktop>/../poker-sse-server/static` — correct
     // under `cargo run -p poker-desktop` (CWD = workspace root) and for an
     // installed binary whose CWD is arbitrary, as long as the static dir is
     // shipped alongside. See the README "packaging" note.
-    let sibling = env!("CARGO_MANIFEST_DIR");
-    let candidate = format!("{sibling}/../poker-sse-server/static");
-    if Path::new(&candidate).is_dir() {
-        return candidate;
-    }
-    // Last resort: let the SSE server's own fallback handle it.
-    "static".to_string()
+    let sibling = format!("{}/../poker-sse-server/static", env!("CARGO_MANIFEST_DIR"));
+    Path::new(&sibling).is_dir().then_some(sibling)
 }
 
 /// A locally-hosted game. Dropping the [`Handle`] cancels the server task.
@@ -72,12 +64,15 @@ impl Handle {
 /// same port on their router. Permissive CORS is correct here — anyone who
 /// can reach the port should be allowed to play.
 pub fn start(port: u16, runtime: &tokio::runtime::Handle) -> Handle {
-    let static_dir = resolve_static_dir();
-    let config = ServerConfig {
-        port,
-        static_dir,
-        cors: CorsConfig::Permissive,
-    };
+    let mut config = ServerConfig::from_env();
+    config.port = port;
+    if std::env::var("STATIC_DIR").is_err() {
+        // cargo-run CWDs miss the server's "static" default; prefer the
+        // sibling crate's committed static dir when it's there.
+        if let Some(dir) = sibling_static_dir() {
+            config.static_dir = dir;
+        }
+    }
 
     let cancel = CancellationToken::new();
     let cancel_for_task = cancel.clone();

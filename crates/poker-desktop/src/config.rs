@@ -26,9 +26,6 @@ pub fn default_server_url() -> String {
     "https://acrilique.com/poker".to_string()
 }
 
-/// Port used when hosting a game in-process. `--port` overrides it.
-const DEFAULT_HOST_PORT: u16 = 3001;
-
 /// A webview poker client. By default it connects to the public server; pass
 /// `--host` to start a local server instead so friends can join you over the
 /// LAN (or the internet with a forwarded router port).
@@ -43,8 +40,9 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     host: bool,
 
-    /// Port for the local server when `--host` is set (default: 3001).
-    #[arg(long, default_value_t = DEFAULT_HOST_PORT)]
+    /// Port for the local server when `--host` is set. Defaults to the SSE
+    /// server's default port.
+    #[arg(long, default_value_t = poker_sse_server::ServerConfig::default().port)]
     port: u16,
 }
 

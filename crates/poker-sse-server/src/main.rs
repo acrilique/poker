@@ -17,11 +17,12 @@
 
 //! Standalone poker SSE server binary.
 //!
-//! Thin entry point: parses environment variables and delegates to
-//! [`poker_sse_server::run`]. All real work lives in the library so the
-//! desktop client can reuse it for "host a game" mode.
+//! Thin entry point: parses environment variables via
+//! [`ServerConfig::from_env`] and delegates to [`poker_sse_server::run`]. All
+//! real work lives in the library so the desktop client can reuse it for
+//! "host a game" mode.
 
-use poker_sse_server::{CorsConfig, ServerConfig, run};
+use poker_sse_server::{ServerConfig, run};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -33,22 +34,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(3001);
-
-    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string());
-
-    let cors = std::env::var("CORS_ORIGIN").map_or_else(
-        |_| CorsConfig::Permissive,
-        |origins| CorsConfig::Allow(origins.split(',').map(str::to_string).collect()),
-    );
-
-    run(ServerConfig {
-        port,
-        static_dir,
-        cors,
-    })
-    .await
+    run(ServerConfig::from_env()).await
 }

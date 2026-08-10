@@ -77,18 +77,61 @@ pub struct ServerConfig {
     pub cors: CorsConfig,
 }
 
-impl ServerConfig {
+impl Default for ServerConfig {
     /// Sensible LAN-friendly defaults: permissive CORS, port 3001, a
-    /// `static/` directory resolved relative to the process CWD. Override
-    /// fields as needed.
-    #[must_use]
-    pub fn new(port: u16) -> Self {
+    /// `static/` directory resolved relative to the process CWD.
+    fn default() -> Self {
         Self {
-            port,
+            port: 3001,
             static_dir: "static".to_string(),
             cors: CorsConfig::Permissive,
         }
     }
+}
+
+impl ServerConfig {
+    /// [`Default`] with an explicit port.
+    #[must_use]
+    pub fn new(port: u16) -> Self {
+        Self {
+            port,
+            ..Self::default()
+        }
+    }
+
+    /// Defaults overridden by the `PORT`, `STATIC_DIR`, and `CORS_ORIGIN`
+    /// environment variables (the standalone binary's knobs). Embedders like
+    /// `poker-desktop` call this and then override fields.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        let port = std::env::var("PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(defaults.port);
+        let static_dir = std::env::var("STATIC_DIR").unwrap_or(defaults.static_dir);
+        let cors = std::env::var("CORS_ORIGIN").map_or_else(
+            |_| CorsConfig::Permissive,
+            |origins| CorsConfig::Allow(origins.split(',').map(str::to_string).collect()),
+        );
+        Self {
+            port,
+            static_dir,
+            cors,
+        }
+    }
+}
+
+/// tower-http's default compression predicate minus the SSE carve-out:
+/// compress everything except gRPC and images, but allow `text/event-stream`.
+///
+/// Exported so `tests/sse_compression_latency.rs` exercises the exact
+/// production predicate instead of mirroring it.
+#[must_use]
+pub fn compression_predicate() -> impl Predicate {
+    SizeAbove::default()
+        .and(NotForContentType::GRPC)
+        .and(NotForContentType::IMAGES)
 }
 
 /// Build the full Axum router (routes + compression + CORS + state).
@@ -124,11 +167,7 @@ pub fn build_router(config: &ServerConfig) -> Router {
     // Verified in `tests/sse_compression_latency.rs`: ~8:1 brotli / ~6.8:1
     // gzip on real `state_events` payloads (`examples/measure_payloads.rs`).
 
-    // tower-http's default minus the SSE carve-out: compress everything
-    // except gRPC and images, but allow `text/event-stream`.
-    let compress_when = SizeAbove::default()
-        .and(NotForContentType::GRPC)
-        .and(NotForContentType::IMAGES);
+    let compress_when = compression_predicate();
 
     Router::new()
         .route("/poker", get(handlers::shell))

@@ -44,7 +44,7 @@ use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use futures_util::stream::{self};
 use tower_http::compression::CompressionLayer;
-use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
+use tower_http::compression::predicate::Predicate;
 
 /// Size of one fat event's payload — representative of a `state_events`
 /// `#game-root` morph (~5 KB of repetitive, compressible markup).
@@ -75,15 +75,10 @@ async fn two_events() -> impl axum::response::IntoResponse {
 }
 
 /// tower-http's `DefaultPredicate` minus the `NotForContentType::SSE`
-/// carve-out — i.e. it permits compressing `text/event-stream`. The documented
-/// override path (see `DefaultPredicate` rustdoc).
+/// carve-out — i.e. it permits compressing `text/event-stream`. Uses the
+/// production predicate so the test exercises exactly what the router applies.
 fn predicate_allowing_sse() -> impl Predicate {
-    // `SizeAbove` defaults to its 32-byte floor (the crate constant is
-    // `pub(crate)`; the `Default` impl exposes the same value).
-    SizeAbove::default()
-        .and(NotForContentType::GRPC)
-        .and(NotForContentType::IMAGES)
-    // intentionally omits `.and(NotForContentType::SSE)`
+    poker_sse_server::compression_predicate()
 }
 
 /// A body frame as observed by the client: wall-clock time since request start
