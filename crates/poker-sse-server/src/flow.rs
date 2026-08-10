@@ -32,9 +32,9 @@ use poker_core::game_logic::{BlindConfig, GamePhase, PlayerAction, TURN_TIMEOUT_
 use poker_core::poker::{Card, Hand};
 use tokio::sync::Mutex;
 
-use crate::fanout::{broadcast_state, ctx_of, send_error};
+use crate::fanout::{broadcast_state, send_all, send_error};
 use crate::render;
-use crate::room::{CallerCtx, Fanout, Room, remove_player_now};
+use crate::room::{CallerCtx, Room, remove_player_now};
 
 // ---------------------------------------------------------------------------
 // Post-action state machine
@@ -592,22 +592,7 @@ async fn broadcast_allin_showdown(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
 
     // Equity isn't in GameState, so render the all-in reveal table per-viewer
     // (is_us is viewer-relative). The only UI not derivable from the snapshot.
-    let per_viewer: Vec<(u32, Vec<datastar::DatastarEvent>)> = {
-        let ctx = ctx_of(&room, room_id);
-        room.players
-            .keys()
-            .map(|&viewer| {
-                let events = vec![render::equity_table_events(
-                    &ctx,
-                    viewer,
-                    &hands_with_equity,
-                )];
-                (viewer, events)
-            })
-            .collect()
-    };
-    let mut fan = Fanout::new(&mut room);
-    for (viewer, events) in per_viewer {
-        fan.send_to(viewer, &events);
-    }
+    send_all(&mut room, room_id, |ctx, viewer| {
+        vec![render::equity_table_events(ctx, viewer, &hands_with_equity)]
+    });
 }

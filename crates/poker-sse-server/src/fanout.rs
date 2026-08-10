@@ -53,11 +53,23 @@ pub(crate) fn ctx_of<'a>(room: &'a Room, room_id: &'a str) -> Ctx<'a> {
 /// `#game-root`) and fan out. Each viewer's state regions are recomputed from
 /// the final `GameState` at a point where the game is about to wait.
 pub(crate) fn broadcast_state(room: &mut Room, room_id: &str) {
+    send_all(room, room_id, render::state_events);
+}
+
+/// Collect per-viewer events under the room lock (each `Ctx` is
+/// viewer-relative), then fan them out. The one shared implementation of the
+/// "broadcast to every connected player" pattern — call sites only provide the
+/// per-viewer event builder.
+pub(crate) fn send_all(
+    room: &mut Room,
+    room_id: &str,
+    events_for: impl Fn(&Ctx<'_>, u32) -> Vec<datastar::DatastarEvent>,
+) {
     let per_viewer: Vec<(u32, Vec<datastar::DatastarEvent>)> = {
         let ctx = ctx_of(room, room_id);
         room.players
             .keys()
-            .map(|&viewer| (viewer, render::state_events(&ctx, viewer)))
+            .map(|&viewer| (viewer, events_for(&ctx, viewer)))
             .collect()
     };
     let mut fan = Fanout::new(room);

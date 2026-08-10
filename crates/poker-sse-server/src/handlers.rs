@@ -33,7 +33,7 @@ use serde::Deserialize;
 use crate::fanout::{render_full_snapshot, send_all};
 use crate::flow;
 use crate::render;
-use crate::room::{CallerCtx, Fanout, resolve_caller};
+use crate::room::{CallerCtx, resolve_caller};
 
 use crate::AppState;
 
@@ -557,12 +557,7 @@ async fn maybe_cleanup_after_action(state: &AppState, ctx: &CallerCtx) {
         room.game_over = true;
         // Surface the notice and blank session signals on every connected
         // client now, not on the next attach.
-        let evs = render::game_over_events();
-        let per_viewer: Vec<u32> = room.players.keys().copied().collect();
-        let mut fan = Fanout::new(&mut room);
-        for viewer in per_viewer {
-            fan.send_to(viewer, &evs);
-        }
+        send_all(&mut room, &ctx.room_id, |_, _| render::game_over_events());
     }
     drop(room);
 }
