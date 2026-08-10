@@ -516,7 +516,14 @@ pub async fn action_update_settings(
 
     let config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
     let starting_bbs = starting_bbs_from_signals(&signals.stack_bbs);
-    flow::update_settings(&ctx.room_arc, &ctx.room_id, ctx.player_id, config, starting_bbs).await;
+    flow::update_settings(
+        &ctx.room_arc,
+        &ctx.room_id,
+        ctx.player_id,
+        config,
+        starting_bbs,
+    )
+    .await;
     no_content()
 }
 

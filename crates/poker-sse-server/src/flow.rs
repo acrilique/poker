@@ -235,11 +235,7 @@ pub(crate) async fn sitin(room_arc: &Arc<Mutex<Room>>, room_id: &str, player_id:
 /// Host-only: toggle the late-entry flag. Rejects non-host callers with the
 /// same [`poker_core::game_logic::StartGameError::NotHost`] toast the rest of
 /// the flow uses.
-pub(crate) async fn toggle_late_entry(
-    room_arc: &Arc<Mutex<Room>>,
-    room_id: &str,
-    caller_id: u32,
-) {
+pub(crate) async fn toggle_late_entry(room_arc: &Arc<Mutex<Room>>, room_id: &str, caller_id: u32) {
     let mut room = room_arc.lock().await;
     if let Err(e) = room.game_state.require_host(caller_id) {
         send_error(&mut room, room_id, caller_id, &e.to_string());
