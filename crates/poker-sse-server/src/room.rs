@@ -767,14 +767,15 @@ pub struct CallerCtx {
 
 /// Resolve the caller from `room_id` + `session_token` signals.
 ///
-/// Returns an error string suitable for a log line on failure.
+/// Returns [`RoomError`] on failure; callers surface the `Display` text (log
+/// line, error toast) rather than re-stating it.
 pub async fn resolve_caller(
     manager: &RoomManager,
     room_id: &str,
     session_token: &str,
-) -> Result<CallerCtx, String> {
+) -> Result<CallerCtx, RoomError> {
     let Some(room_arc) = manager.get_room(room_id).await else {
-        return Err(format!("Room '{room_id}' not found"));
+        return Err(RoomError::RoomNotFound(room_id.to_string()));
     };
     // Hold the room lock only for the lookup, then release before
     // constructing the cheap `CallerCtx`.
@@ -782,8 +783,8 @@ pub async fn resolve_caller(
         let room = room_arc.lock().await;
         match RoomManager::lookup_session(&room, session_token) {
             Ok(pid) if room.game_state.players.contains_key(&pid) => pid,
-            Ok(_) => return Err("Session expired — player was removed".to_string()),
-            Err(e) => return Err(e.to_string()),
+            Ok(_) => return Err(RoomError::SessionExpired),
+            Err(e) => return Err(e),
         }
     };
     Ok(CallerCtx {

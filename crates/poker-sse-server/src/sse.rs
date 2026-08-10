@@ -98,7 +98,7 @@ pub async fn events(
     let caller = match resolve_caller(&manager, &room_id, &token).await {
         Ok(c) => c,
         Err(e) => {
-            let mut evs = render::error_events_pub(&e);
+            let mut evs = render::error_events_pub(&e.to_string());
             evs.push(render::patch_signals(
                 &serde_json::json!({ "sessiontoken": "", "roomid": "" }),
             ));
