@@ -1267,19 +1267,7 @@ pub fn calculate_equity_multi(hands: &[Hand], board: &Board, iterations: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Helper to create cards easily
-    fn c(rank: CardNumber, suit: CardSuit) -> Card {
-        Card(rank, suit)
-    }
-
-    fn make_board(flop: Option<[Card; 3]>, turn: Option<Card>, river: Option<Card>) -> Board {
-        Board {
-            flop: flop.map(|f| (f[0], f[1], f[2])),
-            turn,
-            river,
-        }
-    }
+    use crate::test_util::{c, make_board};
 
     #[test]
     fn test_card_display() {

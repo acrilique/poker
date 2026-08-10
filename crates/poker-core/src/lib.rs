@@ -17,3 +17,12 @@
 
 pub mod game_logic;
 pub mod poker;
+
+/// Test/bench/example fixtures (card, board, and game-state builders).
+///
+/// Gated behind the `test-util` feature (enabled by default) so benches —
+/// which link the library without `cfg(test)` — and examples in other crates
+/// can reuse the same helpers as the unit tests instead of re-implementing
+/// them.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;

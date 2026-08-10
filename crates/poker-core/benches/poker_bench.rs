@@ -1,25 +1,10 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use poker_core::poker::{
-    Board, Card, CardNumber, CardSuit, FullHand, Hand, calculate_equity, calculate_equity_multi,
+    Board, CardNumber, CardSuit, FullHand, Hand, calculate_equity, calculate_equity_multi,
     get_all_cards, get_all_numbers,
 };
+use poker_core::test_util::{c, make_board};
 use std::hint::black_box;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn make_board(flop: Option<[Card; 3]>, turn: Option<Card>, river: Option<Card>) -> Board {
-    Board {
-        flop: flop.map(|f| (f[0], f[1], f[2])),
-        turn,
-        river,
-    }
-}
-
-const fn c(rank: CardNumber, suit: CardSuit) -> Card {
-    Card(rank, suit)
-}
 
 // ---------------------------------------------------------------------------
 // Benchmarks

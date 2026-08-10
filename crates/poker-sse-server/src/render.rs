@@ -242,7 +242,7 @@ pub(crate) fn now_epoch_ms() -> u128 {
 /// reconnect-safe countdown into the rendered DOM (the client ticks against
 /// `deadline - Date.now()`), so a re-render re-bakes the same value rather than
 /// restarting the countdown.
-pub(crate) fn epoch_ms_deadline(remaining_ms: u128) -> String {
+pub fn epoch_ms_deadline(remaining_ms: u128) -> String {
     now_epoch_ms().saturating_add(remaining_ms).to_string()
 }
 

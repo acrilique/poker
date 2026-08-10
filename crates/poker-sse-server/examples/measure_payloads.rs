@@ -28,9 +28,9 @@ use brotli::CompressorReader as BrotliEncoder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use poker_core::game_logic::BlindConfig;
 use poker_core::game_logic::{GamePhase, GameState, PlayerStatus};
-use poker_core::poker::{Card, CardNumber, CardSuit};
+use poker_core::poker::{CardNumber, CardSuit};
+use poker_core::test_util::{c, make_state};
 use poker_sse_server::render::{self, Ctx};
 
 /// Serialize one Datastar event to the SSE wire format. Reproduces the format
@@ -84,33 +84,6 @@ fn brotli(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Build a `GameState` with `n` players, started, dealt to `phase`.
-fn make_state(n_players: usize, phase: GamePhase) -> GameState {
-    let mut gs = GameState::new();
-    gs.blind_config = BlindConfig::default();
-    gs.starting_bbs = 100;
-    gs.big_blind = 20;
-    for i in 1..=n_players {
-        gs.add_player(format!("Player{i}"));
-    }
-    // Mirror handlers.rs::start_game.
-    gs.game_started = true;
-    gs.starting_big_blind = gs.big_blind;
-    gs.starting_chips = gs.starting_bbs.saturating_mul(gs.big_blind);
-    gs.start_new_hand();
-
-    // Advance the engine to the requested phase.
-    loop {
-        if gs.phase == phase || matches!(gs.phase, GamePhase::Showdown) {
-            break;
-        }
-        // Force betting-complete so advance_phase is legal.
-        let _ = gs.is_betting_complete();
-        gs.advance_phase();
-    }
-    gs
-}
-
 /// One measurement row.
 struct Sample {
     name: &'static str,
@@ -161,7 +134,6 @@ fn report(samples: &[Sample]) {
 fn main() {
     // Use deterministic hole cards / community so the size reflects a realistic
     // payload rather than RNG variance. We patch them in after make_state.
-    let hole = |n: CardNumber, s: CardSuit| Card(n, s);
 
     // --- Sample 1: Lobby (pre-game, several players seated) ---
     let mut lobby = GameState::new();
@@ -178,8 +150,8 @@ fn main() {
         let actor = preflop.current_player_id().unwrap_or(1);
         if let Some(p) = preflop.players.get_mut(&actor) {
             p.hole_cards = Some((
-                hole(CardNumber::Ace, CardSuit::Spades),
-                hole(CardNumber::King, CardSuit::Spades),
+                c(CardNumber::Ace, CardSuit::Spades),
+                c(CardNumber::King, CardSuit::Spades),
             ));
         }
     }
@@ -190,8 +162,8 @@ fn main() {
         let viewer = flop.player_order.first().copied().unwrap_or(1);
         if let Some(p) = flop.players.get_mut(&viewer) {
             p.hole_cards = Some((
-                hole(CardNumber::Queen, CardSuit::Hearts),
-                hole(CardNumber::Jack, CardSuit::Hearts),
+                c(CardNumber::Queen, CardSuit::Hearts),
+                c(CardNumber::Jack, CardSuit::Hearts),
             ));
         }
     }
@@ -210,8 +182,8 @@ fn main() {
         let viewer = river.player_order.first().copied().unwrap_or(1);
         if let Some(p) = river.players.get_mut(&viewer) {
             p.hole_cards = Some((
-                hole(CardNumber::Ten, CardSuit::Diamonds),
-                hole(CardNumber::Nine, CardSuit::Diamonds),
+                c(CardNumber::Ten, CardSuit::Diamonds),
+                c(CardNumber::Nine, CardSuit::Diamonds),
             ));
         }
     }
@@ -223,11 +195,11 @@ fn main() {
             if let Some(p) = show.players.get_mut(&pid) {
                 p.status = PlayerStatus::AllIn;
                 p.hole_cards = Some((
-                    hole(
+                    c(
                         [CardNumber::Ace, CardNumber::King, CardNumber::Queen][i],
                         CardSuit::Spades,
                     ),
-                    hole(
+                    c(
                         [CardNumber::King, CardNumber::Queen, CardNumber::Jack][i],
                         CardSuit::Hearts,
                     ),
@@ -240,13 +212,7 @@ fn main() {
     let viewer_of = |gs: &GameState| gs.player_order.first().copied().unwrap_or(1);
 
     // A deadline 30s out, matching a fresh turn at TURN_TIMEOUT_SECS.
-    let turn_deadline = {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        Some((now + 30_000).to_string())
-    };
+    let turn_deadline = Some(render::epoch_ms_deadline(30_000));
 
     let samples = vec![
         Sample {
