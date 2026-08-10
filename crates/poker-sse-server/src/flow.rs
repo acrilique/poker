@@ -28,7 +28,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use poker_core::game_logic::{GamePhase, PlayerAction, TURN_TIMEOUT_SECS};
+use poker_core::game_logic::{BlindConfig, GamePhase, PlayerAction, TURN_TIMEOUT_SECS};
 use poker_core::poker::{Card, Hand};
 use tokio::sync::Mutex;
 
@@ -200,6 +200,76 @@ pub(crate) async fn resume_after_sit_in(room_arc: &Arc<Mutex<Room>>, room_id: &s
     if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
         process_action(pid, act, 0, room_arc, room_id).await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Host-only actions
+// ---------------------------------------------------------------------------
+
+/// A sitting-out player sits back in. Re-renders immediately (player list +
+/// controls changed), then — if the game was paused waiting for players —
+/// hands off to [`resume_after_sit_in`] → [`maybe_start_new_hand`], which
+/// re-evaluates the dealable count and re-pauses if the sit-in didn't reach
+/// ≥2. The room lock is scoped so it isn't held across that await.
+pub(crate) async fn sitin(room_arc: &Arc<Mutex<Room>>, room_id: &str, player_id: u32) {
+    let resume = {
+        let mut room = room_arc.lock().await;
+        if !room
+            .game_state
+            .players
+            .get(&player_id)
+            .is_some_and(|p| p.sitting_out)
+        {
+            return;
+        }
+        room.game_state.set_sitting_in(player_id);
+        broadcast_state(&mut room, room_id);
+        room.game_state.waiting_for_players
+    };
+
+    if resume {
+        resume_after_sit_in(room_arc, room_id).await;
+    }
+}
+
+/// Host-only: toggle the late-entry flag. Rejects non-host callers with the
+/// same [`poker_core::game_logic::StartGameError::NotHost`] toast the rest of
+/// the flow uses.
+pub(crate) async fn toggle_late_entry(
+    room_arc: &Arc<Mutex<Room>>,
+    room_id: &str,
+    caller_id: u32,
+) {
+    let mut room = room_arc.lock().await;
+    if let Err(e) = room.game_state.require_host(caller_id) {
+        send_error(&mut room, room_id, caller_id, &e.to_string());
+        return;
+    }
+    room.game_state.allow_late_entry = !room.game_state.allow_late_entry;
+    // Late-entry toggle only changes the controls panel; re-render state.
+    broadcast_state(&mut room, room_id);
+    drop(room);
+}
+
+/// Host-only: apply the blind schedule and (pre-game) starting stack settings.
+/// Rejects non-host callers with the same [`StartGameError::NotHost`] toast
+/// the rest of the flow uses. The signal → domain coercion stays in the HTTP
+/// layer; this receives typed values.
+pub(crate) async fn update_settings(
+    room_arc: &Arc<Mutex<Room>>,
+    room_id: &str,
+    caller_id: u32,
+    blind_config: BlindConfig,
+    starting_bbs: u32,
+) {
+    let mut room = room_arc.lock().await;
+    if let Err(e) = room.game_state.require_host(caller_id) {
+        send_error(&mut room, room_id, caller_id, &e.to_string());
+        return;
+    }
+    room.game_state.apply_settings(blind_config, starting_bbs);
+    broadcast_state(&mut room, room_id);
+    drop(room);
 }
 
 // ---------------------------------------------------------------------------

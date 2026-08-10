@@ -27,10 +27,10 @@ use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Sse};
 use datastar::axum::ReadSignals;
-use poker_core::game_logic::{BlindConfig, PlayerAction, StartGameError};
+use poker_core::game_logic::{BlindConfig, PlayerAction};
 use serde::Deserialize;
 
-use crate::fanout::{broadcast_state, render_full_snapshot, send_error};
+use crate::fanout::{render_full_snapshot, send_all};
 use crate::flow;
 use crate::render;
 use crate::room::{CallerCtx, Fanout, resolve_caller};
@@ -489,34 +489,9 @@ pub async fn action_sitin(
     let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
-    let room_arc = ctx.room_arc.clone();
-    // Decide under the room lock whether to resume, then release before
-    // awaiting (so we don't hold it across the deal/timer setup).
-    let resume = {
-        let mut room = room_arc.lock().await;
-        let pid = ctx.player_id;
-        if !room
-            .game_state
-            .players
-            .get(&pid)
-            .is_some_and(|p| p.sitting_out)
-        {
-            return no_content();
-        }
-        room.game_state.set_sitting_in(pid);
-        // Re-render (player list + controls changed). resume_after_sit_in
-        // renders again if it un-pauses the game and starts a hand.
-        broadcast_state(&mut room, &ctx.room_id);
-
-        // If the game was paused waiting for players, hand off to
-        // resume_after_sit_in → maybe_start_new_hand, which re-evaluates the
-        // dealable count and re-pauses if the sit-in didn't reach ≥2.
-        room.game_state.waiting_for_players
-    };
-
-    if resume {
-        flow::resume_after_sit_in(&room_arc, &ctx.room_id).await;
-    }
+    // Decides under the room lock whether to resume; releases it before
+    // awaiting the deal/timer setup.
+    flow::sitin(&ctx.room_arc, &ctx.room_id, ctx.player_id).await;
     no_content()
 }
 
@@ -527,20 +502,7 @@ pub async fn action_toggle_late_entry(
     let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
-    let mut room = ctx.room_arc.lock().await;
-    if room.game_state.host_id != ctx.player_id {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            ctx.player_id,
-            &StartGameError::NotHost.to_string(),
-        );
-        return no_content();
-    }
-    room.game_state.allow_late_entry = !room.game_state.allow_late_entry;
-    // Late-entry toggle only changes the controls panel; re-render state.
-    broadcast_state(&mut room, &ctx.room_id);
-    drop(room);
+    flow::toggle_late_entry(&ctx.room_arc, &ctx.room_id, ctx.player_id).await;
     no_content()
 }
 
@@ -551,23 +513,10 @@ pub async fn action_update_settings(
     let Some(ctx) = authorize(&state, &signals).await else {
         return no_content();
     };
-    let mut room = ctx.room_arc.lock().await;
-    if room.game_state.host_id != ctx.player_id {
-        send_error(
-            &mut room,
-            &ctx.room_id,
-            ctx.player_id,
-            &StartGameError::NotHost.to_string(),
-        );
-        return no_content();
-    }
 
     let config = blind_config_from_signals(&signals.blind_mins, &signals.blind_pct);
     let starting_bbs = starting_bbs_from_signals(&signals.stack_bbs);
-    room.game_state.apply_settings(config, starting_bbs);
-
-    broadcast_state(&mut room, &ctx.room_id);
-    drop(room);
+    flow::update_settings(&ctx.room_arc, &ctx.room_id, ctx.player_id, config, starting_bbs).await;
     no_content()
 }
 

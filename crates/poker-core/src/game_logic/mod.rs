@@ -350,9 +350,7 @@ impl GameState {
         if self.player_count() < 2 {
             return Err(StartGameError::NotEnoughPlayers);
         }
-        if self.host_id != host_id {
-            return Err(StartGameError::NotHost);
-        }
+        self.require_host(host_id)?;
 
         self.game_started = true;
 
@@ -366,6 +364,18 @@ impl GameState {
         }
 
         self.start_new_hand();
+        Ok(())
+    }
+
+    /// Check that `id` is the room host. Host-gated actions in the transport
+    /// layers use this; [`Self::try_start`] shares the same check.
+    ///
+    /// # Errors
+    /// Returns [`StartGameError::NotHost`] when `id` is not the host.
+    pub const fn require_host(&self, id: u32) -> Result<(), StartGameError> {
+        if self.host_id != id {
+            return Err(StartGameError::NotHost);
+        }
         Ok(())
     }
 
