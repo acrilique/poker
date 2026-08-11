@@ -110,7 +110,7 @@ function pokerToastShow() {
 // ---------------------------------------------------------------------------
 let _countdownStarted = false;
 
-// Must match TURN_TIMEOUT_SECS in poker-core/src/game_logic.rs.
+// Must match TURN_TIMEOUT_SECS in poker-core/src/game_logic/mod.rs.
 const POKER_TURN_TOTAL_SECS = 30;
 
 function pokerBlindsTick() {

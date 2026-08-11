@@ -329,8 +329,7 @@ fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
     })
 }
 
-/// Build the per-viewer player rows shared by `player_list_events` and
-/// `render_player_list`. Split out so the two public renderers stay in sync.
+/// Build the per-viewer player rows for [`render_player_list`].
 fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
     let gs = ctx.gs;
     let turn_pid = if gs.is_betting_phase() {

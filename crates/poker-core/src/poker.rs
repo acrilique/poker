@@ -242,17 +242,6 @@ impl Board {
         }
         (cards, len)
     }
-
-    /// Fill missing board cards from a deck (mutates deck by popping cards).
-    #[must_use]
-    pub fn fill_from_deck(&self, deck: &mut Vec<Card>) -> Self {
-        let flop = self
-            .flop
-            .or_else(|| Some((deck.pop()?, deck.pop()?, deck.pop()?)));
-        let turn = self.turn.or_else(|| deck.pop());
-        let river = self.river.or_else(|| deck.pop());
-        Self { flop, turn, river }
-    }
 }
 
 /// Represents a player's hole cards (2 private cards).
@@ -1076,7 +1065,6 @@ fn to_pct(n: u64) -> f64 {
     f64::from(u32::try_from(n).unwrap_or(u32::MAX))
 }
 
-#[allow(dead_code)]
 #[must_use]
 pub fn calculate_equity(hero: &Hand, board: &Board, iterations: usize) -> (f64, f64, f64) {
     let mut wins = 0u64;
