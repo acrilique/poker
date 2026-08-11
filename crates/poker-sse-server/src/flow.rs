@@ -55,6 +55,17 @@ enum PostAction {
     AllIn,
 }
 
+/// Whether the post-action loop should keep driving after one step. Returned
+/// by [`resolve_and_deal_next`] and [`notify_turn_step`] so their callers can
+/// decide between looping again and stopping.
+enum LoopStep {
+    /// A seed action was consumed (a new hand dealt, or a sitting-out player
+    /// auto-acted) — re-run the loop to evaluate the resulting state.
+    Continue,
+    /// The game paused or ended — stop here.
+    Done,
+}
+
 /// Drive the post-action state machine to its next stable wait point, starting
 /// from the currently-locked settled state.
 ///
@@ -70,33 +81,35 @@ enum PostAction {
 /// Returns [`PostAction::Done`] once a live turn is pending or the game has
 /// paused / ended.
 async fn drive_post_action(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> PostAction {
-    let mut room = room_arc.lock().await;
     loop {
+        // Each iteration starts from the settled state freshly locked; the
+        // guard is explicitly dropped before every await so long delays (the
+        // next-hand deal, turn timers) never hold the room lock.
+        let mut room = room_arc.lock().await;
+
         // Lone survivor (everyone else folded) → resolve and maybe deal again.
         if room.game_state.active_player_count() == 1 {
-            room.game_state.resolve_hand();
-            broadcast_state(&mut room, room_id);
             drop(room);
-            if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
-                room = room_arc.lock().await;
-                apply_sitting_out_action(&mut room, pid, act);
-                continue;
+            if !matches!(
+                resolve_and_deal_next(room_arc, room_id).await,
+                LoopStep::Continue
+            ) {
+                return PostAction::Done;
             }
-            return PostAction::Done;
+            continue;
         }
 
         if room.game_state.is_betting_complete() {
             // River + betting complete → showdown, resolve, maybe deal again.
             if room.game_state.phase == GamePhase::River {
-                room.game_state.resolve_hand();
-                broadcast_state(&mut room, room_id);
                 drop(room);
-                if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
-                    room = room_arc.lock().await;
-                    apply_sitting_out_action(&mut room, pid, act);
-                    continue;
+                if !matches!(
+                    resolve_and_deal_next(room_arc, room_id).await,
+                    LoopStep::Continue
+                ) {
+                    return PostAction::Done;
                 }
-                return PostAction::Done;
+                continue;
             }
             // Betting complete mid-hand → advance the phase and render the new
             // community cards.
@@ -108,20 +121,57 @@ async fn drive_post_action(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> PostAc
                 drop(room);
                 return PostAction::AllIn;
             }
+        }
 
-            if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc, room_id) {
-                apply_sitting_out_action(&mut room, pid, act);
-                continue;
-            }
+        // Still action to take → notify the next player's turn (auto-acting
+        // any sitting-out player until a real turn or a resolve lands).
+        drop(room);
+        if !matches!(
+            notify_turn_step(room_arc, room_id).await,
+            LoopStep::Continue
+        ) {
             return PostAction::Done;
         }
+    }
+}
 
-        // Still action to take → notify the next player's turn.
-        if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc, room_id) {
-            apply_sitting_out_action(&mut room, pid, act);
-            continue;
-        }
-        return PostAction::Done;
+/// Resolve the current hand, render the showdown, and — if at least two
+/// active players remain — deal the next hand after the short deal delay.
+///
+/// The room lock is scoped so it is not held across the deal delay. When a
+/// new hand is dealt and its first turn lands on a sitting-out player, that
+/// seed auto-action is applied before returning [`LoopStep::Continue`]:
+/// [`drive_post_action`] evaluates state first, so the seed must land
+/// beforehand.
+///
+/// Returns [`LoopStep::Done`] when no new hand was dealt (the game paused or
+/// ended).
+async fn resolve_and_deal_next(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> LoopStep {
+    let mut room = room_arc.lock().await;
+    room.game_state.resolve_hand();
+    broadcast_state(&mut room, room_id);
+    drop(room);
+
+    if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
+        let mut room = room_arc.lock().await;
+        apply_sitting_out_action(&mut room, pid, act);
+        return LoopStep::Continue;
+    }
+    LoopStep::Done
+}
+
+/// Notify the next player of their turn — or, when they are sitting out,
+/// apply their auto-action so the caller can keep looping. Terminal for a
+/// real turn (renders state and starts the turn timer via
+/// [`notify_turn_and_start_timer`]); returns [`LoopStep::Done`] then.
+/// Returns [`LoopStep::Continue`] when a sitting-out auto-action was applied.
+async fn notify_turn_step(room_arc: &Arc<Mutex<Room>>, room_id: &str) -> LoopStep {
+    let mut room = room_arc.lock().await;
+    if let Some((pid, act)) = notify_turn_and_start_timer(&mut room, room_arc, room_id) {
+        apply_sitting_out_action(&mut room, pid, act);
+        LoopStep::Continue
+    } else {
+        LoopStep::Done
     }
 }
 
@@ -377,27 +427,20 @@ async fn run_out_board(room_arc: &Arc<Mutex<Room>>, room_id: &str) {
         broadcast_state(&mut room, room_id);
 
         if room.game_state.phase == GamePhase::Showdown {
-            room.game_state.resolve_hand();
-            broadcast_state(&mut room, room_id);
             drop(room);
-
-            // Start the next hand (if enough active players remain). When its
-            // first turn lands on a sitting-out player, apply their auto-action
-            // before driving the post-action loop — drive_post_action evaluates
-            // state first, so the seed action must land beforehand.
-            if let Some((pid, act)) = maybe_start_new_hand(room_arc, room_id).await {
-                {
-                    let mut room = room_arc.lock().await;
-                    apply_sitting_out_action(&mut room, pid, act);
-                }
-                match drive_post_action(room_arc, room_id).await {
+            match resolve_and_deal_next(room_arc, room_id).await {
+                // A new hand was dealt (seed action applied) → keep driving the
+                // post-action loop; a fresh all-in re-runs the board out.
+                LoopStep::Continue => match drive_post_action(room_arc, room_id).await {
                     PostAction::Done => {}
                     // Still all-in after the new hand → re-run the board out.
                     PostAction::AllIn => {
                         broadcast_allin_showdown(room_arc, room_id).await;
                         continue 'run_out;
                     }
-                }
+                },
+                // No next hand (game paused / ended) → stop the run-out.
+                LoopStep::Done => {}
             }
             return;
         }
