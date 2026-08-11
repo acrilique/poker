@@ -506,6 +506,17 @@ pub async fn action_toggle_late_entry(
     no_content()
 }
 
+pub async fn action_toggle_strict_raises(
+    State(state): State<AppState>,
+    ReadSignals(signals): ReadSignals<SessionSignals>,
+) -> impl IntoResponse {
+    let Some(ctx) = authorize(&state, &signals).await else {
+        return no_content();
+    };
+    flow::toggle_strict_raises(&ctx.room_arc, &ctx.room_id, ctx.player_id).await;
+    no_content()
+}
+
 pub async fn action_update_settings(
     State(state): State<AppState>,
     ReadSignals(signals): ReadSignals<UpdateSettingsSignals>,

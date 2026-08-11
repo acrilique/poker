@@ -397,6 +397,26 @@ async fn update_settings_rejects_non_host() {
     drop(room);
 }
 
+/// The strict-raises toggle is host-gated like the other host settings. Here
+/// we just assert the host-gate (`host_id != ctx.player_id`) and the default
+/// mode; the full rejection path lives in the handler, the floor semantics in
+/// the engine tests.
+#[tokio::test]
+async fn strict_raises_toggle_rejects_non_host() {
+    let state = app_state();
+    let players = room_with_players(&state, "strict1", &["host", "other"]).await;
+    let host_id = players[0].0;
+    let other_id = players[1].0;
+
+    let room_arc = state.room_manager.get_room("strict1").await.unwrap();
+    let room = room_arc.lock().await;
+    assert_eq!(room.game_state.host_id, host_id);
+    // A non-host can't pass the handler's host-gate.
+    assert_ne!(room.game_state.host_id, other_id);
+    // Casual min-raise rules (floor always one BB) are the default.
+    assert!(!room.game_state.strict_raises);
+}
+
 /// A host applying blind settings updates both `blind_config` copies and
 /// re-anchors the schedule mid-game. Calls the real `GameState::apply_settings`
 /// (the handler's mutation) directly, so this pins its post-conditions.

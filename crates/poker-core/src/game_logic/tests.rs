@@ -881,14 +881,89 @@ fn test_apply_action_call_allin_sets_status() {
 fn test_apply_action_raise_reopens_betting() {
     let mut gs = heads_up_preflop(1);
     // Raise by 60 over a 20 current bet → new current_bet 80, increment 60
-    // ≥ min_raise (20), so last_raiser_index is set and min_raise bumps.
-    // Capture the actor's index before the action: apply_action sets
-    // last_raiser_index to the *raisers* index, then advances the turn.
+    // ≥ min_raise (20), so last_raiser_index is set. Capture the actor's
+    // index before the action: apply_action sets last_raiser_index to the
+    // *raisers* index, then advances the turn.
     let raiser_index = gs.current_player_index;
     gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
     assert_eq!(gs.current_bet, 80);
-    assert_eq!(gs.min_raise, 60);
     assert_eq!(gs.last_raiser_index, Some(raiser_index));
+    // Casual mode (the default): the min-raise floor stays at one BB
+    // regardless of the raise size.
+    assert_eq!(gs.min_raise, gs.big_blind);
+}
+
+/// Strict mode: a full raise raises the floor to its own size, so the next
+/// raise must be at least as large (standard no-limit rules).
+#[test]
+fn test_strict_raise_floor_follows_last_raise() {
+    let mut gs = heads_up_preflop(1);
+    gs.set_strict_raises(true);
+    gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
+    assert_eq!(gs.min_raise, 60);
+
+    // A re-raise below the floor is rejected…
+    assert_eq!(
+        gs.apply_action(2, PlayerAction::Raise, 40),
+        Err(ActionError::RaiseBelowMinimum { min: 60 })
+    );
+    // …and one at the floor succeeds, keeping it at the last raise size.
+    gs.apply_action(2, PlayerAction::Raise, 60).unwrap();
+    assert_eq!(gs.min_raise, 60);
+    assert_eq!(gs.current_bet, 140);
+}
+
+/// The min-raise floor resets to one BB on a new street (standard rules;
+/// casual mode coincides since its floor is the BB anyway).
+#[test]
+fn test_raise_floor_resets_each_street() {
+    let mut gs = heads_up_preflop(1);
+    gs.set_strict_raises(true);
+    gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
+    assert_eq!(gs.min_raise, 60);
+    gs.apply_action(2, PlayerAction::Call, 0).unwrap();
+
+    gs.advance_phase();
+    assert_eq!(gs.min_raise, gs.big_blind, "flop floor resets to one BB");
+}
+
+/// Strict mode: a full all-in raise raises the floor like any other raise.
+#[test]
+fn test_strict_full_allin_raise_bumps_floor() {
+    let mut gs = heads_up_preflop(1);
+    gs.set_strict_raises(true);
+    gs.apply_action(1, PlayerAction::Raise, 60).unwrap(); // floor 60, bet 80
+    gs.players.get_mut(&2).unwrap().chips = 150;
+    // All-in for 150 total: increment 70 ≥ floor 60, so betting reopens and
+    // the floor follows the all-in size.
+    gs.apply_action(2, PlayerAction::AllIn, 0).unwrap();
+    assert_eq!(gs.current_bet, 150);
+    assert_eq!(gs.min_raise, 70);
+}
+
+/// Casual mode (the default): even a large all-in raise leaves the floor at
+/// one big blind.
+#[test]
+fn test_casual_allin_raise_keeps_bb_floor() {
+    let mut gs = heads_up_preflop(1);
+    gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
+    gs.players.get_mut(&2).unwrap().chips = 150;
+    gs.apply_action(2, PlayerAction::AllIn, 0).unwrap();
+    assert_eq!(gs.current_bet, 150);
+    assert_eq!(gs.min_raise, gs.big_blind);
+}
+
+/// Disabling strict mode mid-round relaxes the floor back to one BB
+/// immediately.
+#[test]
+fn test_set_strict_raises_relaxes_floor_on_disable() {
+    let mut gs = heads_up_preflop(1);
+    gs.set_strict_raises(true);
+    gs.apply_action(1, PlayerAction::Raise, 60).unwrap();
+    assert_eq!(gs.min_raise, 60);
+
+    gs.set_strict_raises(false);
+    assert_eq!(gs.min_raise, gs.big_blind);
 }
 
 #[test]

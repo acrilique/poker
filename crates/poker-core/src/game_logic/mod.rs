@@ -45,11 +45,11 @@ pub const TURN_TIMEOUT_SECS: u32 = 30;
 
 /// Server-side game state shared across all connections.
 ///
-/// The five independent boolean flags (`game_started`, `big_blind_option`,
-/// `has_acted_this_round`, `allow_late_entry`, `waiting_for_players`) are each
-/// semantically distinct engine state accessed directly at ~100 sites;
-/// grouping them would obscure the state machine without a correctness
-/// benefit, so the bool cap is relaxed here.
+/// The six independent boolean flags (`game_started`, `big_blind_option`,
+/// `has_acted_this_round`, `allow_late_entry`, `waiting_for_players`,
+/// `strict_raises`) are each semantically distinct engine state accessed
+/// directly at ~100 sites; grouping them would obscure the state machine
+/// without a correctness benefit, so the bool cap is relaxed here.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GameState {
     pub players: HashMap<u32, Player>,
@@ -85,6 +85,16 @@ pub struct GameState {
     pub starting_bbs: u32,
     /// Whether late entry is allowed (toggled by host).
     pub allow_late_entry: bool,
+    /// Whether to enforce standard no-limit min-raise rules (host toggle,
+    /// see [`Self::set_strict_raises`]).
+    ///
+    /// When `false` (the default, "casual" mode) the minimum raise is always
+    /// one big blind: every raise may be as small as the BB regardless of
+    /// earlier raises. When `true`, a raise must be at least the size of the
+    /// last full raise in the current betting round; the floor resets to one
+    /// BB at the start of each round, and a full all-in raise raises the
+    /// floor like any other raise.
+    pub strict_raises: bool,
     /// Player ID of the room host (first player to join).
     pub host_id: u32,
     /// Starting chip count, frozen at game start for late entries.
@@ -134,6 +144,7 @@ impl Default for GameState {
             last_blind_increase: None,
             starting_bbs: 50,
             allow_late_entry: false,
+            strict_raises: false,
             host_id: 0,
             starting_chips: 0,
             starting_big_blind: 0,
@@ -688,6 +699,10 @@ impl GameState {
             player.current_bet = 0;
         }
         self.current_bet = 0;
+        // The min-raise floor resets to one big blind on every street — the
+        // standard rule, which casual mode coincides with (its floor is the
+        // big blind anyway).
+        self.min_raise = self.big_blind;
         self.last_raiser_index = None;
         self.big_blind_option = false;
         self.has_acted_this_round = false;
@@ -1028,6 +1043,20 @@ impl GameState {
         }
     }
 
+    /// Toggle strict (standard) min-raise enforcement. Host-gated callers
+    /// validate the caller first via [`Self::require_host`].
+    ///
+    /// Disabling relaxes the floor back to one big blind immediately.
+    /// Enabling keeps the current floor until the next full raise — casual
+    /// mode doesn't track the last raise size, so there is nothing to
+    /// restore mid-round.
+    pub const fn set_strict_raises(&mut self, strict: bool) {
+        self.strict_raises = strict;
+        if !strict {
+            self.min_raise = self.big_blind;
+        }
+    }
+
     /// Get valid actions for current player.
     #[must_use]
     pub fn valid_actions(&self, player_id: u32) -> Vec<PlayerAction> {
@@ -1151,12 +1180,19 @@ impl GameState {
                 let new_bet = self.place_bet(player_id, raise_total, prev_current_bet);
                 let previous_current_bet = self.current_bet;
                 self.current_bet = new_bet;
-                // Only reopen betting (set last_raiser / bump min_raise) if this
-                // raise constitutes a full legal raise. A sub-minimum all-in
-                // raise must NOT, matching the AllIn arm below.
+                // Only reopen betting (set last_raiser, update the raise floor)
+                // if this raise constitutes a full legal raise. A sub-minimum
+                // all-in raise must NOT, matching the AllIn arm below.
                 let raise_increment = new_bet.saturating_sub(previous_current_bet);
                 if raise_increment >= self.min_raise {
-                    self.min_raise = raise_increment.max(self.big_blind);
+                    // Strict mode: the floor follows the last full raise.
+                    // Casual mode: the floor stays at one big blind no matter
+                    // the raise size.
+                    self.min_raise = if self.strict_raises {
+                        raise_increment.max(self.big_blind)
+                    } else {
+                        self.big_blind
+                    };
                     self.last_raiser_index = Some(self.current_player_index);
                 }
                 self.big_blind_option = false;
@@ -1165,11 +1201,17 @@ impl GameState {
                 let all_in = chips;
                 let new_bet = self.place_bet(player_id, all_in, prev_current_bet);
                 if new_bet > self.current_bet {
-                    // Only reopen betting if the all-in constitutes a full legal
-                    // raise. An all-in never raises the min_raise floor.
+                    // Only reopen betting if the all-in constitutes a full
+                    // legal raise.
                     let raise_increment = new_bet.saturating_sub(self.current_bet);
                     if raise_increment >= self.min_raise {
                         self.last_raiser_index = Some(self.current_player_index);
+                        // Strict mode: a full all-in raise raises the floor
+                        // like any other raise. Casual mode keeps it at one
+                        // big blind.
+                        if self.strict_raises {
+                            self.min_raise = raise_increment.max(self.big_blind);
+                        }
                     }
                     self.current_bet = new_bet;
                 }

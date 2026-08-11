@@ -297,6 +297,28 @@ pub(crate) async fn toggle_late_entry(room_arc: &Arc<Mutex<Room>>, room_id: &str
     drop(room);
 }
 
+/// Host-only: toggle strict (standard) min-raise enforcement. Rejects
+/// non-host callers with the same [`StartGameError::NotHost`] toast the rest
+/// of the flow uses. The engine relaxes the floor back to one BB when strict
+/// mode is switched off mid-round ([`GameState::set_strict_raises`]).
+pub(crate) async fn toggle_strict_raises(
+    room_arc: &Arc<Mutex<Room>>,
+    room_id: &str,
+    caller_id: u32,
+) {
+    let mut room = room_arc.lock().await;
+    if let Err(e) = room.game_state.require_host(caller_id) {
+        send_error(&mut room, room_id, caller_id, &e.to_string());
+        return;
+    }
+    let strict = !room.game_state.strict_raises;
+    room.game_state.set_strict_raises(strict);
+    // The toggle changes the controls panel and the action bar's Min label;
+    // re-render state.
+    broadcast_state(&mut room, room_id);
+    drop(room);
+}
+
 /// Host-only: apply the blind schedule and (pre-game) starting stack settings.
 /// Rejects non-host callers with the same [`StartGameError::NotHost`] toast
 /// the rest of the flow uses. The signal → domain coercion stays in the HTTP

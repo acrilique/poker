@@ -191,6 +191,10 @@ pub fn build_router(config: &ServerConfig) -> Router {
             post(handlers::action_toggle_late_entry),
         )
         .route(
+            "/poker/action/toggle-strict-raises",
+            post(handlers::action_toggle_strict_raises),
+        )
+        .route(
             "/poker/action/update-settings",
             post(handlers::action_update_settings),
         )

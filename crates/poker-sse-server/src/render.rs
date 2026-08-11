@@ -179,12 +179,13 @@ pub struct ActionBarTpl {
     pub raise_unit: &'static str,
 }
 
-/// Host-only controls shown in the controls panel. Groups `is_host` and
-/// `allow_late_entry` to keep `ControlsTpl` under the bool limit.
+/// Host-only controls shown in the controls panel. Groups `is_host` and the
+/// host toggles to keep `ControlsTpl` under the bool limit.
 #[derive(Clone, Copy, Default)]
 pub struct HostControls {
     pub is_host: bool,
     pub allow_late_entry: bool,
+    pub strict_raises: bool,
 }
 
 /// Current blind/stack config, stringified for input `value` attributes.
@@ -641,6 +642,7 @@ fn render_controls(ctx: &Ctx, viewer: u32) -> String {
             host: HostControls {
                 is_host: gs.host_id == viewer,
                 allow_late_entry: gs.allow_late_entry,
+                strict_raises: gs.strict_raises,
             },
             sitting_out,
             settings: HostSettings {

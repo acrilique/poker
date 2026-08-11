@@ -29,6 +29,9 @@
       <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="el.classList.add('loading'); @post('/poker/action/toggle-late-entry')">
         Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
       </button>
+      <button class="btn btn-block {% if host.strict_raises %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="el.classList.add('loading'); @post('/poker/action/toggle-strict-raises')">
+        Strict Raises: {% if host.strict_raises %}ON{% else %}OFF{% endif %}
+      </button>
       <button class="btn btn-elevated btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/update-settings')">Save settings</button>
     </div>
   </details>
