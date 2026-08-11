@@ -574,26 +574,44 @@ impl GameState {
         true
     }
 
-    /// Move to next player.
-    pub fn next_player(&mut self) {
+    /// Walk forward from the current seat to the next seat whose player is
+    /// [`PlayerStatus::Active`], wrapping at most once around `player_order`.
+    ///
+    /// With `include_start` the starting seat itself is checked first
+    /// ([`Self::advance_phase`] begins each phase at the small-blind seat);
+    /// without it the scan starts at the following seat, so the player who
+    /// just acted ([`Self::next_player`]) is always skipped. If the full
+    /// circle has no Active seat, the index is left on the starting seat.
+    fn advance_to_active_seat(&mut self, include_start: bool) {
         let start = self.current_player_index;
+        let mut cursor = if include_start {
+            start
+        } else {
+            next_seat(start, 1, self.player_order.len())
+        };
         loop {
-            self.current_player_index =
-                next_seat(self.current_player_index, 1, self.player_order.len());
-
-            if let Some(player) = self
+            let is_active = self
                 .player_order
-                .get(self.current_player_index)
+                .get(cursor)
                 .and_then(|&id| self.players.get(&id))
-                && player.status == PlayerStatus::Active
-            {
-                break;
+                .is_some_and(|p| p.status == PlayerStatus::Active);
+            if is_active {
+                self.current_player_index = cursor;
+                return;
             }
-
-            if self.current_player_index == start {
-                break;
+            cursor = next_seat(cursor, 1, self.player_order.len());
+            if cursor == start {
+                // Full circle without an Active seat — fall back to the start.
+                self.current_player_index = start;
+                return;
             }
         }
+    }
+
+    /// Move to next player.
+    pub fn next_player(&mut self) {
+        // Skip the seat that just acted: the scan starts after it.
+        self.advance_to_active_seat(false);
     }
 
     /// Advance to next phase.
@@ -607,23 +625,8 @@ impl GameState {
         self.has_acted_this_round = false;
 
         self.current_player_index = next_seat(self.dealer_index, 1, self.player_order.len());
-
-        let start = self.current_player_index;
-        loop {
-            if let Some(player) = self
-                .player_order
-                .get(self.current_player_index)
-                .and_then(|&id| self.players.get(&id))
-                && player.status == PlayerStatus::Active
-            {
-                break;
-            }
-            self.current_player_index =
-                next_seat(self.current_player_index, 1, self.player_order.len());
-            if self.current_player_index == start {
-                break;
-            }
-        }
+        // The small-blind seat opens the phase, so it is eligible itself.
+        self.advance_to_active_seat(true);
 
         self.first_actor_index = Some(self.current_player_index);
 
