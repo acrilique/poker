@@ -1154,3 +1154,80 @@ fn test_apply_settings_mid_game_ignores_stack_and_reanchors() {
         "blind schedule re-anchored to ~now"
     );
 }
+
+/// The phase predicates the transport renders turns and bets from.
+#[test]
+fn test_phase_predicates() {
+    for phase in [
+        GamePhase::PreFlop,
+        GamePhase::Flop,
+        GamePhase::Turn,
+        GamePhase::River,
+    ] {
+        assert!(phase.is_betting(), "{phase:?} has a live turn");
+        assert!(phase.is_in_hand(), "{phase:?} has live bets");
+    }
+    assert!(!GamePhase::Lobby.is_betting());
+    assert!(!GamePhase::Showdown.is_betting());
+    assert!(!GamePhase::HandOver.is_betting());
+    assert!(!GamePhase::Lobby.is_in_hand());
+    assert!(GamePhase::Showdown.is_in_hand());
+    assert!(!GamePhase::HandOver.is_in_hand());
+}
+
+/// The GameState-level phase predicates gate on `game_started` as well.
+#[test]
+fn test_game_state_phase_predicates() {
+    let mut gs = GameState::new();
+    let host = gs.add_player("a".into()).id;
+    let _p2 = gs.add_player("b".into()).id;
+    gs.host_id = host;
+    assert!(!gs.is_betting_phase(), "lobby has no turn");
+    assert!(!gs.is_in_hand(), "lobby has no live hand");
+
+    gs.try_start(host).unwrap();
+    assert!(gs.is_betting_phase(), "preflop has a live turn");
+    assert!(gs.is_in_hand(), "preflop has live bets");
+}
+
+/// The blind-seat queries expose the same rule `start_new_hand` posts from:
+/// small blind one seat clockwise of the button, big blind two seats.
+#[test]
+fn test_blind_seat_queries_follow_dealer() {
+    let mut gs = GameState::new();
+    let host = gs.add_player("a".into()).id;
+    let _p2 = gs.add_player("b".into()).id;
+    let p3 = gs.add_player("c".into()).id;
+    gs.host_id = host;
+    gs.try_start(host).unwrap();
+
+    // The first deal moves the button to seat 1.
+    assert_eq!(gs.dealer_index, 1);
+    assert_eq!(gs.small_blind_seat(), Some(2));
+    assert_eq!(gs.big_blind_seat(), Some(0));
+    // player_order = [1, 2, 3]: seat 2 is player 3, seat 0 is player 1.
+    assert_eq!(gs.small_blind_id(), Some(p3));
+    assert_eq!(gs.big_blind_id(), Some(host));
+    // The engine posted exactly those amounts from exactly those seats.
+    assert_eq!(gs.players.get(&p3).unwrap().current_bet, gs.small_blind);
+    assert_eq!(gs.players.get(&host).unwrap().current_bet, gs.big_blind);
+}
+
+/// Heads-up the same offsets apply: the non-dealer seat posts the small
+/// blind and the dealer posts the big blind. (Note: standard heads-up
+/// convention assigns them the other way around — dealer posts the small
+/// blind. This test pins the engine's current rule.)
+#[test]
+fn test_blind_seat_queries_heads_up() {
+    let mut gs = GameState::new();
+    let host = gs.add_player("a".into()).id;
+    let p2 = gs.add_player("b".into()).id;
+    gs.host_id = host;
+    gs.try_start(host).unwrap();
+
+    assert_eq!(gs.dealer_index, 1);
+    assert_eq!(gs.small_blind_seat(), Some(0));
+    assert_eq!(gs.big_blind_seat(), Some(1));
+    assert_eq!(gs.small_blind_id(), Some(host));
+    assert_eq!(gs.big_blind_id(), Some(p2));
+}

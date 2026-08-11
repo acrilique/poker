@@ -28,7 +28,7 @@ use askama::Template;
 use datastar::DatastarEvent;
 use datastar::consts::ElementPatchMode;
 use datastar::prelude::{PatchElements, PatchSignals};
-use poker_core::game_logic::{GamePhase, GameState, PlayerAction, PlayerStatus, next_seat};
+use poker_core::game_logic::{GamePhase, GameState, PlayerAction, PlayerStatus};
 use poker_core::poker::Card;
 
 // ---------------------------------------------------------------------------
@@ -332,11 +332,7 @@ fn build_blinds_timer(gs: &GameState) -> Option<BlindsTimerView> {
 /// `render_player_list`. Split out so the two public renderers stay in sync.
 fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
     let gs = ctx.gs;
-    let turn_pid = if gs.game_started
-        && !matches!(
-            gs.phase,
-            GamePhase::Lobby | GamePhase::Showdown | GamePhase::HandOver
-        ) {
+    let turn_pid = if gs.is_betting_phase() {
         gs.current_player_id()
     } else {
         None
@@ -346,8 +342,7 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
         .iter()
         .filter_map(|&pid| {
             let p = gs.players.get(&pid)?;
-            let in_hand =
-                gs.game_started && !matches!(gs.phase, GamePhase::Lobby | GamePhase::HandOver);
+            let in_hand = gs.is_in_hand();
             let bet = if in_hand {
                 p.current_bet.min(p.chips)
             } else {
@@ -361,8 +356,7 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
             } else {
                 (p.chips, None)
             };
-            let blinds_up = in_hand && gs.player_order.len() >= 2;
-            let blind = if blinds_up {
+            let blind = if in_hand {
                 seat_blind(gs, pid)
             } else {
                 Blind::None
@@ -395,32 +389,17 @@ fn build_player_entries(ctx: &Ctx, viewer: u32) -> Vec<PlayerEntry> {
         .collect()
 }
 
-/// Safe modular seat lookup: returns the player ID `offset` seats clockwise
-/// from the dealer, or `None` if the table is empty. Avoids unchecked indexing
-/// and overflowing arithmetic.
+/// Which blind a seat posts this hand, via the engine's blind-seat queries
+/// ([`GameState::small_blind_id`] / [`GameState::big_blind_id`]) so the
+/// rendered labels can't drift from the posting rule in `start_new_hand`.
 fn seat_blind(gs: &GameState, pid: u32) -> Blind {
-    let seats = gs.player_order.len();
-    if seats < 2 {
-        return Blind::None;
-    }
-    let sb = seat_at(gs, gs.dealer_index, 1, seats);
-    let bb = seat_at(gs, gs.dealer_index, 2, seats);
-    if sb == Some(pid) {
+    if gs.small_blind_id() == Some(pid) {
         Blind::Small
-    } else if bb == Some(pid) {
+    } else if gs.big_blind_id() == Some(pid) {
         Blind::Big
     } else {
         Blind::None
     }
-}
-
-/// Seat lookup via the engine's shared [`next_seat`] arithmetic (`poker-core`),
-/// then read the player ID sitting there (`None` when the table is empty).
-fn seat_at(gs: &GameState, base: usize, offset: usize, seats: usize) -> Option<u32> {
-    if seats == 0 {
-        return None;
-    }
-    gs.player_order.get(next_seat(base, offset, seats)).copied()
 }
 
 fn render_player_list(ctx: &Ctx, viewer: u32) -> String {
@@ -545,11 +524,7 @@ fn hole_hand_rank(gs: &GameState, viewer: u32) -> Option<String> {
 fn render_action_bar(gs: &GameState, viewer: u32) -> String {
     let sitting_out = gs.players.get(&viewer).is_some_and(|p| p.sitting_out);
 
-    let is_turn = gs.game_started
-        && matches!(
-            gs.phase,
-            GamePhase::PreFlop | GamePhase::Flop | GamePhase::Turn | GamePhase::River
-        )
+    let is_turn = gs.is_betting_phase()
         && gs.current_player_id() == Some(viewer)
         && gs
             .players

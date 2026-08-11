@@ -118,6 +118,27 @@ pub enum GamePhase {
     HandOver,
 }
 
+impl GamePhase {
+    /// A betting round is live: players act on their turns (pre-flop through
+    /// river). Shared by the engine's turn logic and the transport's
+    /// turn/action-bar renderers so "which phases have a turn" is defined once.
+    #[must_use]
+    pub const fn is_betting(self) -> bool {
+        matches!(self, Self::PreFlop | Self::Flop | Self::Turn | Self::River)
+    }
+
+    /// A dealt hand is still in progress: any betting phase or showdown.
+    /// Excludes the lobby and the post-resolve wait, where per-player
+    /// `current_bet` values are stale.
+    #[must_use]
+    pub const fn is_in_hand(self) -> bool {
+        matches!(
+            self,
+            Self::PreFlop | Self::Flop | Self::Turn | Self::River | Self::Showdown
+        )
+    }
+}
+
 /// Error from [`crate::game_logic::GameState::apply_action`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionError {

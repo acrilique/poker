@@ -261,6 +261,22 @@ impl GameState {
         !self.game_started && matches!(self.phase, GamePhase::Lobby) && self.hand_number > 0
     }
 
+    /// The game has started and a betting round is live (pre-flop through
+    /// river) — the phases where a player turn exists. Shared by the
+    /// transport's turn display and action-bar renderers.
+    #[must_use]
+    pub const fn is_betting_phase(&self) -> bool {
+        self.game_started && self.phase.is_betting()
+    }
+
+    /// The game has started and a hand is in progress (any betting phase or
+    /// showdown): per-player bets are live and displayed. False in the lobby
+    /// and during the post-resolve wait, where `current_bet` is stale.
+    #[must_use]
+    pub const fn is_in_hand(&self) -> bool {
+        self.game_started && self.phase.is_in_hand()
+    }
+
     /// Get players who can still act (active but not all-in).
     ///
     /// One of three "how many players" predicates — pick by intent:
@@ -433,12 +449,15 @@ impl GameState {
         // Move dealer button
         self.dealer_index = next_seat(self.dealer_index, 1, self.player_order.len());
 
-        // Determine blinds positions
-        let sb_index = next_seat(self.dealer_index, 1, self.player_order.len());
-        let bb_index = next_seat(self.dealer_index, 2, self.player_order.len());
-
-        // The ≥ 2 player guard above guarantees these seats exist; extract them
-        // without indexing so a future change to that guard can't panic here.
+        // Determine blind positions via the shared seat queries. The ≥ 2
+        // player guard above guarantees these exist; extract them without
+        // indexing so a future change to that guard can't panic here.
+        let Some(sb_index) = self.small_blind_seat() else {
+            return;
+        };
+        let Some(bb_index) = self.big_blind_seat() else {
+            return;
+        };
         let Some(sb_id) = self.player_order.get(sb_index).copied() else {
             return;
         };
@@ -501,6 +520,47 @@ impl GameState {
     #[must_use]
     pub fn current_player_id(&self) -> Option<u32> {
         self.player_order.get(self.current_player_index).copied()
+    }
+
+    /// Seat index (into `player_order`) that posts the small blind this hand,
+    /// or `None` with fewer than two seats.
+    ///
+    /// Single source for the blind-position rule: [`Self::start_new_hand`]
+    /// posts from these seats, and the transport derives the rendered blind
+    /// labels from the [`Self::small_blind_id`] / [`Self::big_blind_id`]
+    /// wrappers, so the two can't drift.
+    #[must_use]
+    pub const fn small_blind_seat(&self) -> Option<usize> {
+        self.blind_seat(1)
+    }
+
+    /// Seat index (into `player_order`) that posts the big blind this hand.
+    /// See [`Self::small_blind_seat`].
+    #[must_use]
+    pub const fn big_blind_seat(&self) -> Option<usize> {
+        self.blind_seat(2)
+    }
+
+    const fn blind_seat(&self, offset: usize) -> Option<usize> {
+        let seats = self.player_order.len();
+        if seats < 2 {
+            return None;
+        }
+        Some(next_seat(self.dealer_index, offset, seats))
+    }
+
+    /// The player ID posting the small blind this hand, if seats are
+    /// assigned. See [`Self::small_blind_seat`].
+    #[must_use]
+    pub fn small_blind_id(&self) -> Option<u32> {
+        self.player_order.get(self.small_blind_seat()?).copied()
+    }
+
+    /// The player ID posting the big blind this hand, if seats are assigned.
+    /// See [`Self::big_blind_seat`].
+    #[must_use]
+    pub fn big_blind_id(&self) -> Option<u32> {
+        self.player_order.get(self.big_blind_seat()?).copied()
     }
 
     /// Check if betting round is complete.
