@@ -216,6 +216,16 @@ impl Room {
         self.sessions.insert(token.clone(), player_id);
         self.player_sessions.insert(player_id, token);
     }
+
+    /// Returns `true` if at least one player holds a live SSE channel.
+    ///
+    /// Players without a channel are either between join and their first
+    /// attach, or within their disconnect grace period — neither can receive
+    /// pushes, so a room where this is `false` is unattended.
+    #[must_use]
+    pub fn any_connected(&self) -> bool {
+        self.players.values().any(|c| c.tx.is_some())
+    }
 }
 
 /// Fanout hub: routes rendered [`DatastarEvent`]s to per-player channels.
@@ -548,7 +558,7 @@ impl RoomManager {
             // stale held seats resurface as duplicates on rejoin. A reload is
             // sub-second, so [`LAST_PLAYER_GRACE_PERIOD`] covers it without
             // holding a dead room hostage.
-            let any_connected = room.players.values().any(|c| c.tx.is_some());
+            let any_connected = room.any_connected();
             let grace = if any_connected {
                 SESSION_GRACE_PERIOD
             } else {
@@ -561,12 +571,8 @@ impl RoomManager {
             remove_player_now(&mut room, room_id, player_id);
             crate::fanout::broadcast_state(&mut room, room_id);
 
-            let any_connected = room.players.values().any(|c| c.tx.is_some());
             drop(room);
-
-            if !any_connected {
-                remove_room_if_empty(&self.rooms, room_id).await;
-            }
+            remove_room_if_unattended(&self.rooms, room_id).await;
         }
     }
 
@@ -609,14 +615,13 @@ impl RoomManager {
             remove_player_now(&mut room, room_id, player_id);
             crate::fanout::broadcast_state(&mut room, room_id);
 
-            let any_connected = room.players.values().any(|c| c.tx.is_some());
             drop(room);
 
-            if !any_connected {
-                remove_room_if_empty(&self.rooms, room_id).await;
-                return LeaveOutcome::RoomRemoved;
-            }
-            return LeaveOutcome::Left;
+            return if remove_room_if_unattended(&self.rooms, room_id).await {
+                LeaveOutcome::RoomRemoved
+            } else {
+                LeaveOutcome::Left
+            };
         }
 
         // Mid-hand: sit out (idempotent) and flag for hand-boundary removal.
@@ -686,11 +691,8 @@ impl RoomManager {
 
                     // If no connected players remain, remove the room
                     // entirely so it doesn't leak memory.
-                    let any_connected = room.players.values().any(|c| c.tx.is_some());
-                    if !any_connected {
-                        drop(room);
-                        remove_room_if_empty(&rooms_ref, &rid).await;
-                    }
+                    drop(room);
+                    remove_room_if_unattended(&rooms_ref, &rid).await;
                 }
             });
         }
@@ -703,22 +705,34 @@ impl RoomManager {
     }
 }
 
-/// Re-check (under the room lock) that a room is still empty, then drop it.
-/// Guards against a reconnect landing between the outer check and the removal.
+/// Remove the room if no connected players remain ("unattended").
+///
+/// The connectivity check under the room lock runs before the rooms-map write
+/// lock, so an attended room never pays for the write lock; the re-check
+/// under the write lock guards against a reconnect landing between the two.
 /// Takes the rooms map by shared reference so the same implementation serves
 /// both `&self` call sites and detached tasks that cloned the `Arc`.
-async fn remove_room_if_empty(rooms: &Arc<Rooms>, room_id: &str) {
+/// Returns `true` if the room was removed.
+async fn remove_room_if_unattended(rooms: &Arc<Rooms>, room_id: &str) -> bool {
+    let Some(room_arc) = self_ref(room_id, rooms).await else {
+        return false;
+    };
+    if room_arc.lock().await.any_connected() {
+        return false;
+    }
+
     let mut rooms = rooms.write().await;
     if let Some(room_arc) = rooms.get(room_id) {
         let room = room_arc.lock().await;
-        let still_empty = !room.players.values().any(|c| c.tx.is_some());
-        if still_empty {
+        if !room.any_connected() {
             drop(room);
             rooms.remove(room_id);
             drop(rooms);
-            tracing::info!(room = room_id, "Removed empty room");
+            tracing::info!(room = room_id, "Removed unattended room");
+            return true;
         }
     }
+    false
 }
 
 /// Permanently remove a player from the room: clears session maps, drops the

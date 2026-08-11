@@ -393,7 +393,7 @@ async fn maybe_start_new_hand(
         // Sweep first — before the active-count / pause decision — so a leave
         // that drops the room below 2 active (→ pause) is still cleaned up. If
         // the sweep emptied the room, let the last stream's Drop tear it down.
-        if sweep_leavers(&mut room, room_id) && !room.players.values().any(|c| c.tx.is_some()) {
+        if sweep_leavers(&mut room, room_id) && !room.any_connected() {
             return None;
         }
 
