@@ -532,6 +532,58 @@ fn classify_groups(rank_count: &[u8; 15]) -> RankGroups {
     }
 }
 
+/// One step of [`build_from_groups`]: take up to `max` cards matching the
+/// condition, in the order they appear in the sorted candidates.
+enum FillGroup<'a> {
+    /// Cards of a single rank.
+    OfRank { rank: CardNumber, max: usize },
+    /// Cards of a single suit.
+    OfSuit { suit: CardSuit, max: usize },
+    /// Cards whose rank isn't any of the given ones.
+    OtherThan { ranks: &'a [CardNumber], max: usize },
+}
+
+impl FillGroup<'_> {
+    const fn max(&self) -> usize {
+        match self {
+            Self::OfRank { max, .. } | Self::OfSuit { max, .. } | Self::OtherThan { max, .. } => {
+                *max
+            }
+        }
+    }
+
+    fn matches(&self, card: Card) -> bool {
+        match self {
+            Self::OfRank { rank, .. } => card.number() == *rank,
+            Self::OfSuit { suit, .. } => card.suit() == *suit,
+            Self::OtherThan { ranks, .. } => !ranks.contains(&card.number()),
+        }
+    }
+}
+
+/// Fill a [`FullHand`] from `sorted` (rank-descending) one [`FillGroup`] at a
+/// time: each group takes up to its `max` matching cards in sorted order.
+/// Unfilled slots keep the `sorted.first()` filler — unreachable for the group
+/// sets the builders pass, which always find their five cards.
+fn build_from_groups(sorted: &[Card], groups: &[FillGroup<'_>]) -> FullHand {
+    let first = sorted.first().copied().unwrap_or(DUMMY_CARD);
+    let mut result = [first; 5];
+    let mut filled = 0usize;
+    for group in groups {
+        for &card in sorted
+            .iter()
+            .filter(|c| group.matches(**c))
+            .take(group.max())
+        {
+            if let Some(slot) = result.get_mut(filled) {
+                *slot = card;
+            }
+            filled = filled.saturating_add(1);
+        }
+    }
+    FullHand(result[0], result[1], result[2], result[3], result[4])
+}
+
 impl Hand {
     /// Collects all available cards (hand + board) into a stack-allocated array.
     /// Returns `(cards, count)` where only `cards[..count]` is valid (2–7 cards).
@@ -696,44 +748,36 @@ impl Hand {
     /// Build a straight (or straight flush if `suit` is Some).
     #[inline]
     fn build_straight(sorted: &[Card], high: CardNumber, suit: Option<CardSuit>) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let suit_filter = |c: &Card| suit.is_none_or(|s| c.suit() == s);
+        // The five ranks of the straight, high to low. The wheel plays the
+        // ace low: 5-4-3-2-A.
+        let mut ranks = [CardNumber::Two; 5];
         if high == CardNumber::Five {
-            // Wheel: 5-4-3-2-A
-            let ranks = [
+            ranks.copy_from_slice(&[
                 CardNumber::Five,
                 CardNumber::Four,
                 CardNumber::Three,
                 CardNumber::Two,
                 CardNumber::Ace,
-            ];
-            for (i, &r) in ranks.iter().enumerate() {
-                if let Some(slot) = result.get_mut(i) {
-                    *slot = sorted
-                        .iter()
-                        .find(|c| c.number() == r && suit_filter(c))
-                        .copied()
-                        .unwrap_or(first);
-                }
-            }
+            ]);
         } else {
             // high is one of 6..=14, so high-4..=high are all valid ranks.
             let hv = high.value();
-            for i in 0..5u8 {
-                // hv is 6..=14 and i is 0..5, so the subtraction can't underflow.
-                let target_val = hv.checked_sub(i).unwrap_or(2);
-                let target = rank_from_val(usize::from(target_val));
-                if let Some(slot) = result.get_mut(usize::from(i)) {
-                    *slot = sorted
-                        .iter()
-                        .find(|c| c.number() == target && suit_filter(c))
-                        .copied()
-                        .unwrap_or(first);
-                }
+            for (i, slot) in ranks.iter_mut().enumerate() {
+                let step = u8::try_from(i).unwrap_or(0);
+                // hv is 6..=14 and step is 0..5, so this can't underflow.
+                *slot = rank_from_val(usize::from(hv.checked_sub(step).unwrap_or(2)));
+            }
+        }
+
+        let first = sorted.first().copied().unwrap_or(DUMMY_CARD);
+        let mut result = [first; 5];
+        for (i, &rank) in ranks.iter().enumerate() {
+            if let Some(slot) = result.get_mut(i) {
+                *slot = sorted
+                    .iter()
+                    .find(|c| c.number() == rank && suit.is_none_or(|s| c.suit() == s))
+                    .copied()
+                    .unwrap_or(first);
             }
         }
         FullHand(result[0], result[1], result[2], result[3], result[4])
@@ -741,145 +785,84 @@ impl Hand {
 
     #[inline]
     fn build_quads(sorted: &[Card], quad_rank: CardNumber) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let mut idx = 0;
-        for c in sorted.iter().filter(|c| c.number() == quad_rank) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        if let Some(c) = sorted.iter().find(|c| c.number() != quad_rank)
-            && let Some(slot) = result.get_mut(idx)
-        {
-            *slot = *c;
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(
+            sorted,
+            &[
+                FillGroup::OfRank {
+                    rank: quad_rank,
+                    max: 4,
+                },
+                FillGroup::OtherThan {
+                    ranks: &[quad_rank],
+                    max: 1,
+                },
+            ],
+        )
     }
 
     #[inline]
     fn build_full_house(sorted: &[Card], trips: CardNumber, pair: CardNumber) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let mut idx = 0;
-        for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        for c in sorted.iter().filter(|c| c.number() == pair).take(2) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(
+            sorted,
+            &[
+                FillGroup::OfRank {
+                    rank: trips,
+                    max: 3,
+                },
+                FillGroup::OfRank { rank: pair, max: 2 },
+            ],
+        )
     }
 
     #[inline]
     fn build_flush(sorted: &[Card], suit: CardSuit) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        for (idx, c) in sorted
-            .iter()
-            .filter(|c| c.suit() == suit)
-            .take(5)
-            .enumerate()
-        {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(sorted, &[FillGroup::OfSuit { suit, max: 5 }])
     }
 
     #[inline]
     fn build_trips(sorted: &[Card], trips: CardNumber) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let mut idx = 0;
-        for c in sorted.iter().filter(|c| c.number() == trips).take(3) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        for c in sorted.iter().filter(|c| c.number() != trips).take(2) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(
+            sorted,
+            &[
+                FillGroup::OfRank {
+                    rank: trips,
+                    max: 3,
+                },
+                FillGroup::OtherThan {
+                    ranks: &[trips],
+                    max: 2,
+                },
+            ],
+        )
     }
 
     #[inline]
     fn build_two_pair(sorted: &[Card], p1: CardNumber, p2: CardNumber) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let mut idx = 0;
-        for c in sorted.iter().filter(|c| c.number() == p1).take(2) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        for c in sorted.iter().filter(|c| c.number() == p2).take(2) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        for c in sorted
-            .iter()
-            .filter(|c| c.number() != p1 && c.number() != p2)
-            .take(1)
-        {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(
+            sorted,
+            &[
+                FillGroup::OfRank { rank: p1, max: 2 },
+                FillGroup::OfRank { rank: p2, max: 2 },
+                FillGroup::OtherThan {
+                    ranks: &[p1, p2],
+                    max: 1,
+                },
+            ],
+        )
     }
 
     #[inline]
     fn build_one_pair(sorted: &[Card], pair: CardNumber) -> FullHand {
-        let first = sorted
-            .first()
-            .copied()
-            .unwrap_or(Card(CardNumber::Two, CardSuit::Diamonds));
-        let mut result = [first; 5];
-        let mut idx = 0;
-        for c in sorted.iter().filter(|c| c.number() == pair).take(2) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        for c in sorted.iter().filter(|c| c.number() != pair).take(3) {
-            if let Some(slot) = result.get_mut(idx) {
-                *slot = *c;
-            }
-            idx = idx.saturating_add(1);
-        }
-        FullHand(result[0], result[1], result[2], result[3], result[4])
+        build_from_groups(
+            sorted,
+            &[
+                FillGroup::OfRank { rank: pair, max: 2 },
+                FillGroup::OtherThan {
+                    ranks: &[pair],
+                    max: 3,
+                },
+            ],
+        )
     }
 }
 
