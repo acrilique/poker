@@ -119,10 +119,23 @@ pub async fn events(
         return events_response(render::game_over_events());
     }
 
-    let (rx, initial, generation) =
-        RoomManager::attach_stream(&caller.room_arc, &room_id, caller.player_id, false).await;
+    let (rx, initial, generation, needs_resume) =
+        RoomManager::attach_stream(&caller.room_arc, &room_id, caller.player_id).await;
 
     let pid = caller.player_id;
+
+    // The attach sat a reconnecting player back in; if the game was paused
+    // waiting for players, resume it. Spawned so the initial snapshot isn't
+    // held back by the next-hand deal delay — the same hand-off the Sit In
+    // button uses (`flow::sitin`).
+    if needs_resume {
+        let room_arc = caller.room_arc.clone();
+        let resume_rid = room_id.clone();
+        tokio::spawn(async move {
+            crate::flow::resume_after_sit_in(&room_arc, &resume_rid).await;
+        });
+    }
+
     let manager2 = manager.clone();
     let rid = room_id.clone();
 

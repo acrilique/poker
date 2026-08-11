@@ -17,9 +17,10 @@
 )]
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use poker_core::game_logic::BlindConfig;
+use poker_core::game_logic::{BlindConfig, PlayerAction};
 use poker_sse_server::AppState;
 use poker_sse_server::room::{LeaveOutcome, RoomManager};
 
@@ -68,8 +69,8 @@ async fn attach_with_rx(
         let room = room_arc.lock().await;
         *room.sessions.get(token).unwrap()
     };
-    let (rx, _events, generation) =
-        RoomManager::attach_stream(&room_arc, room_id, pid, false).await;
+    let (rx, _events, generation, _needs_resume) =
+        RoomManager::attach_stream(&room_arc, room_id, pid).await;
     (pid, generation, rx)
 }
 
@@ -97,10 +98,13 @@ async fn lobby_disconnect_removes_room() {
     );
 }
 
-/// An in-game disconnect sits the player out and starts the grace period, but
-/// the player remains in game state (their seat is held).
+/// An in-game disconnect starts the grace period and holds the seat, but does
+/// NOT sit the player out: a reload is sub-second, and an instant "(away)"
+/// left a sticky flag that survived the reconnect. Absence only becomes
+/// game-visible when the turn timer expires with the player still gone (see
+/// `timeout_while_disconnected_sits_out_even_on_check`).
 #[tokio::test]
-async fn ingame_disconnect_sits_out_and_holds_seat() {
+async fn ingame_disconnect_holds_seat_without_sitting_out() {
     let state = app_state();
     let players = room_with_players(&state, "ingame1", &["a", "b"]).await;
     let (p1, _g1, _rx1) = attach_with_rx(&state, "ingame1", &players[0].1).await;
@@ -122,15 +126,248 @@ async fn ingame_disconnect_sits_out_and_holds_seat() {
         room.game_state
             .players
             .get(&p1)
-            .is_some_and(|p| p.sitting_out),
-        "disconnected in-game player should be sat out"
+            .is_some_and(|p| !p.sitting_out),
+        "a transient disconnect must not sit the player out"
     );
     assert!(
         room.disconnected_at.contains_key(&p1),
         "grace-period timestamp should be recorded"
     );
+    assert!(
+        room.players.get(&p1).is_some_and(|c| c.tx.is_none()),
+        "the channel should be dropped"
+    );
     // p2 is unaffected.
     assert!(room.game_state.players.contains_key(&p2));
+}
+
+/// The reported regression: reloading the page on your turn sat you out
+/// instantly, the "(away)" flag survived the reconnect, and only a manual
+/// "Sit In" restored play. A reload round-trip must be invisible to the game:
+/// the seat stays live, the turn is kept, and nothing is sat out.
+#[tokio::test]
+async fn mid_turn_reload_keeps_turn_and_away_flag_clear() {
+    let state = app_state();
+    let players = room_with_players(&state, "reload1", &["a", "b"]).await;
+    let (host, host_gen, _rxh) = attach_with_rx(&state, "reload1", &players[0].1).await;
+    let (_p2, p2_gen, _rx2) = attach_with_rx(&state, "reload1", &players[1].1).await;
+
+    let room_arc = state.room_manager.get_room("reload1").await.unwrap();
+    let current = {
+        let mut room = room_arc.lock().await;
+        room.game_state.try_start(host).unwrap();
+        room.game_state.current_player_id().unwrap()
+    };
+    let generation = if current == host { host_gen } else { p2_gen };
+
+    // Reload: the stream drops and re-attaches within the grace window.
+    state
+        .room_manager
+        .disconnect_player("reload1", current, generation)
+        .await;
+    let (_rx, _events, _gen2, needs_resume) =
+        RoomManager::attach_stream(&room_arc, "reload1", current).await;
+
+    let room = room_arc.lock().await;
+    assert!(
+        room.game_state
+            .players
+            .get(&current)
+            .is_some_and(|p| !p.sitting_out),
+        "the reconnected player must not be marked away"
+    );
+    assert_eq!(
+        room.game_state.current_player_id(),
+        Some(current),
+        "it is still their turn after the reload"
+    );
+    assert!(
+        !room.game_state.valid_actions(current).is_empty(),
+        "they can still act"
+    );
+    assert!(
+        !room.disconnected_at.contains_key(&current),
+        "the re-attach must cancel the grace period"
+    );
+    assert!(!needs_resume, "the game was not paused");
+}
+
+/// The turn timer is the "really absent?" probe: when it expires with the
+/// player still disconnected they are marked away even if the forced action is
+/// a free check (a connected player is NOT sat out for a check timeout — the
+/// standing rule). Without the disconnect half, a gone player would stall the
+/// game for a full timeout on every turn and never show as "(away)".
+#[tokio::test]
+async fn timeout_while_disconnected_sits_out_even_on_check() {
+    let state = app_state();
+    let players = room_with_players(&state, "timeout1", &["a", "b", "c"]).await;
+    let (host, _gh, _rxh) = attach_with_rx(&state, "timeout1", &players[0].1).await;
+    let (_pb, _gb, _rxb) = attach_with_rx(&state, "timeout1", &players[1].1).await;
+    let (_pc, _gc, _rxc) = attach_with_rx(&state, "timeout1", &players[2].1).await;
+
+    let room_arc = state.room_manager.get_room("timeout1").await.unwrap();
+    {
+        let mut room = room_arc.lock().await;
+        room.game_state.try_start(host).unwrap();
+        // Drive the betting around to the flop with engine-only actions so the
+        // next actor has a free check (the case a fold-only rule misses).
+        loop {
+            if room.game_state.is_betting_complete() {
+                break;
+            }
+            let pid = room.game_state.current_player_id().unwrap();
+            let act = if room
+                .game_state
+                .valid_actions(pid)
+                .contains(&PlayerAction::Check)
+            {
+                PlayerAction::Check
+            } else {
+                PlayerAction::Call
+            };
+            room.game_state.apply_action(pid, act, 0).unwrap();
+        }
+        room.game_state.advance_phase();
+    }
+
+    let (actor, turn) = {
+        let room = room_arc.lock().await;
+        (
+            room.game_state.current_player_id().unwrap(),
+            room.turn_counter.load(Ordering::SeqCst),
+        )
+    };
+
+    // The actor disconnects; the grace period starts, nothing is sat out.
+    let generation = room_arc
+        .lock()
+        .await
+        .players
+        .get(&actor)
+        .unwrap()
+        .generation;
+    state
+        .room_manager
+        .disconnect_player("timeout1", actor, generation)
+        .await;
+    {
+        let room = room_arc.lock().await;
+        assert!(!room.game_state.players.get(&actor).unwrap().sitting_out);
+    }
+
+    // Their turn timer expires while still disconnected: auto-check + away.
+    poker_sse_server::flow::force_timeout_action(room_arc.clone(), turn, actor, "timeout1").await;
+
+    let (next_actor, turn2) = {
+        let room = room_arc.lock().await;
+        assert!(
+            room.game_state.players.get(&actor).unwrap().sitting_out,
+            "a disconnected player must be marked away at the turn timeout"
+        );
+        assert_ne!(room.game_state.current_player_id(), Some(actor));
+        (
+            room.game_state.current_player_id().unwrap(),
+            room.turn_counter.load(Ordering::SeqCst),
+        )
+    };
+
+    // The next actor is connected: a free-check timeout does NOT sit a
+    // connected player out (standing rule, unchanged).
+    poker_sse_server::flow::force_timeout_action(room_arc.clone(), turn2, next_actor, "timeout1")
+        .await;
+    let room = room_arc.lock().await;
+    assert!(
+        !room
+            .game_state
+            .players
+            .get(&next_actor)
+            .unwrap()
+            .sitting_out,
+        "a connected check-timeout must not sit the player out"
+    );
+}
+
+/// Reconnecting after a timeout sit-out sits the player back in automatically:
+/// the sit-out was imposed by the absence (there is no manual sit-out), and
+/// reattaching is proof of presence. Covers the "reload took longer than the
+/// turn timer" half of the reported scenario. In heads-up the timeout fold
+/// ends the hand and pauses the game (only one dealable player left), so the
+/// attach must also report the resume hand-off.
+#[tokio::test]
+async fn reconnect_after_timeout_sits_back_in_and_resumes() {
+    let state = app_state();
+    let players = room_with_players(&state, "sitback1", &["a", "b"]).await;
+    let (host, host_gen, _rxh) = attach_with_rx(&state, "sitback1", &players[0].1).await;
+    let (_p2, p2_gen, _rx2) = attach_with_rx(&state, "sitback1", &players[1].1).await;
+
+    let room_arc = state.room_manager.get_room("sitback1").await.unwrap();
+    let current = {
+        let mut room = room_arc.lock().await;
+        room.game_state.try_start(host).unwrap();
+        room.game_state.current_player_id().unwrap()
+    };
+    let generation = if current == host { host_gen } else { p2_gen };
+
+    // Disconnect, then the turn timer expires while still gone: auto-acted
+    // (a fold preflop) and marked away.
+    state
+        .room_manager
+        .disconnect_player("sitback1", current, generation)
+        .await;
+    let turn = room_arc.lock().await.turn_counter.load(Ordering::SeqCst);
+    poker_sse_server::flow::force_timeout_action(room_arc.clone(), turn, current, "sitback1").await;
+    {
+        let room = room_arc.lock().await;
+        assert!(room.game_state.players.get(&current).unwrap().sitting_out);
+        assert!(room.disconnected_at.contains_key(&current));
+    }
+
+    // They reload back in: the attach clears the absence-imposed away state
+    // and reports that the paused game needs resuming.
+    let (_rx, _events, _gen2, needs_resume) =
+        RoomManager::attach_stream(&room_arc, "sitback1", current).await;
+    let room = room_arc.lock().await;
+    assert!(
+        !room.game_state.players.get(&current).unwrap().sitting_out,
+        "reconnecting must clear the absence-imposed away state"
+    );
+    assert!(
+        room.game_state.waiting_for_players,
+        "the heads-up game paused when the fold left one dealable player"
+    );
+    assert!(
+        needs_resume,
+        "the sit-in while paused must hand off the resume"
+    );
+}
+
+/// A duplicate-tab attach (no prior disconnect) must not sit a player in:
+/// the auto sit-in fires only for genuine reconnects, so an AFK timeout-fold
+/// sit-out of a still-connected player persists until they click "Sit In".
+#[tokio::test]
+async fn attach_without_disconnect_does_not_sit_in() {
+    let state = app_state();
+    let players = room_with_players(&state, "duptab1", &["a", "b"]).await;
+    let (host, _gh, _rxh) = attach_with_rx(&state, "duptab1", &players[0].1).await;
+    let (_p2, _g2, _rx2) = attach_with_rx(&state, "duptab1", &players[1].1).await;
+
+    let room_arc = state.room_manager.get_room("duptab1").await.unwrap();
+    {
+        let mut room = room_arc.lock().await;
+        room.game_state.try_start(host).unwrap();
+        // Simulate the timeout-fold sit-out of a still-connected player.
+        room.game_state.set_sitting_out(host);
+    }
+
+    // The same player opens a second tab (last-tab-wins attach).
+    let (_rx, _events, _gen2, needs_resume) =
+        RoomManager::attach_stream(&room_arc, "duptab1", host).await;
+    let room = room_arc.lock().await;
+    assert!(
+        room.game_state.players.get(&host).unwrap().sitting_out,
+        "a duplicate-tab attach must not override the sit-out"
+    );
+    assert!(!needs_resume);
 }
 
 /// When the **last** connected player disconnects mid-game, the room is now
@@ -204,7 +441,8 @@ async fn heads_up_reload_rejoins_within_grace() {
         .get_room("hu1")
         .await
         .expect("room must still exist right after a heads-up disconnect (short grace)");
-    let (_rx2, _events, gen2) = RoomManager::attach_stream(&room_arc, "hu1", pid, false).await;
+    let (_rx2, _events, gen2, _needs_resume) =
+        RoomManager::attach_stream(&room_arc, "hu1", pid).await;
 
     let room_arc = state.room_manager.get_room("hu1").await.unwrap();
     let room = room_arc.lock().await;

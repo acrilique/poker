@@ -548,8 +548,12 @@ fn apply_sitting_out_action(room: &mut Room, player_id: u32, action: PlayerActio
 /// Force a check-or-fold for a player whose turn timer has expired. The guard
 /// is released before `process_action_with_room` re-locks; the lint flags the
 /// trivial gap to the block end, which holds no contention.
+///
+/// Public (like [`sweep_leavers`]) so integration tests can drive a timeout
+/// without waiting out [`TURN_TIMEOUT_SECS`]; the production caller is the
+/// timer task spawned in [`notify_turn_and_start_timer`].
 #[allow(clippy::significant_drop_tightening)]
-async fn force_timeout_action(
+pub async fn force_timeout_action(
     room_arc: Arc<Mutex<Room>>,
     expected_turn: u64,
     player_id: u32,
@@ -572,16 +576,27 @@ async fn force_timeout_action(
             return;
         };
 
-        // If forced to fold, sit the player out. The away state is rendered by
-        // the process_action_with_room call below at its terminal point.
-        if act == PlayerAction::Fold
+        // The expired timer proves absence — sit the player out when either:
+        // - the forced action is a fold (the standing rule, which also covers
+        //   connected-but-AFK players), or
+        // - the player is disconnected: without the flag a free check would
+        //   never mark them away, and every future turn of theirs would stall
+        //   the game for a full timeout.
+        // The away state is rendered by the process_action_with_room call
+        // below at its terminal point.
+        let connected = room.players.get(&player_id).is_some_and(|c| c.tx.is_some());
+        if (!connected || act == PlayerAction::Fold)
             && matches!(
                 room.game_state.players.get(&player_id),
                 Some(p) if !p.sitting_out
             )
         {
             room.game_state.set_sitting_out(player_id);
-            tracing::info!(player = player_id, "Auto sitting out after timeout fold");
+            tracing::info!(
+                player = player_id,
+                connected,
+                "Auto sitting out after timeout"
+            );
         }
 
         act

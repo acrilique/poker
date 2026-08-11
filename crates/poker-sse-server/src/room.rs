@@ -421,8 +421,8 @@ impl RoomManager {
     }
 
     /// Attach an SSE stream for the player: installs a fresh channel and
-    /// returns the receiver, a full state snapshot, and a connection
-    /// generation.
+    /// returns the receiver, a full state snapshot, a connection generation,
+    /// and whether the caller must resume a paused game.
     ///
     /// Always attaches (last-tab-wins): a new attach replaces any existing
     /// channel, orphaning the old tab's receiver (its stream ends, its teardown
@@ -434,12 +434,22 @@ impl RoomManager {
     ///
     /// The returned generation must be presented at teardown; a stale teardown
     /// is a no-op and leaves the current connection alone.
+    ///
+    /// A genuine RECONNECT (a grace period was pending) additionally sits the
+    /// player back in under this lock, so the initial snapshot is already
+    /// correct: the sit-out was imposed by the absence — this app has no
+    /// manual sit-out — and reattaching is proof of presence. A duplicate-tab
+    /// attach without a prior disconnect never sits a player in, so an AFK
+    /// timeout-fold sit-out persists until the player clicks Sit In. The
+    /// final `bool` reports that the sit-in happened while the game was
+    /// paused waiting for players; the caller must then drive the resume
+    /// ([`crate::flow::resume_after_sit_in`]) — the same hand-off the Sit In
+    /// button uses.
     pub async fn attach_stream(
         room_arc: &Arc<Mutex<Room>>,
         room_id: &str,
         player_id: u32,
-        _was_offline: bool,
-    ) -> (PlayerRx, Vec<DatastarEvent>, u64) {
+    ) -> (PlayerRx, Vec<DatastarEvent>, u64, bool) {
         let mut room = room_arc.lock().await;
 
         let (tx, rx) = mpsc::channel(PLAYER_CHANNEL_CAPACITY);
@@ -448,7 +458,23 @@ impl RoomManager {
             .get(&player_id)
             .map_or(0, |c| c.generation.wrapping_add(1));
 
-        room.disconnected_at.remove(&player_id);
+        // `wants_leave` is checked even though [`RoomManager::leave_room`]
+        // clears `disconnected_at` (the two can't coexist) so this path can
+        // never resurrect an explicit leaver.
+        let sat_in = room.disconnected_at.remove(&player_id).is_some()
+            && !room.players.get(&player_id).is_some_and(|c| c.wants_leave)
+            && room
+                .game_state
+                .players
+                .get(&player_id)
+                .is_some_and(|p| p.sitting_out);
+        if sat_in {
+            room.game_state.set_sitting_in(player_id);
+            // Update the other players; the reconnecting player's own channel
+            // isn't installed yet — their snapshot below is already correct.
+            crate::fanout::broadcast_state(&mut room, room_id);
+        }
+
         let ctx = crate::fanout::ctx_of(&room, room_id);
         let events = render::full_snapshot(&ctx, player_id);
 
@@ -456,9 +482,10 @@ impl RoomManager {
             conn.tx = Some(tx);
             conn.generation = new_gen;
         }
+        let needs_resume = sat_in && room.game_state.waiting_for_players;
         drop(room);
 
-        (rx, events, new_gen)
+        (rx, events, new_gen, needs_resume)
     }
 
     /// Detach the SSE stream for a player (channel closed by the stream task).
@@ -468,8 +495,9 @@ impl RoomManager {
         self.disconnect_player(room_id, player_id, generation).await;
     }
 
-    /// Soft-disconnect a player during a game: sit them out and start a grace
-    /// period (game state preserved). A stale teardown is a no-op.
+    /// Soft-disconnect a player: drop their channel and start the grace
+    /// period (seat held, game state preserved). Does not sit them out — see
+    /// the body for why. A stale teardown is a no-op.
     pub async fn disconnect_player(&self, room_id: &str, player_id: u32, generation: u64) {
         let rooms = self.rooms.read().await;
         let Some(room_arc) = rooms.get(room_id).cloned() else {
@@ -499,29 +527,22 @@ impl RoomManager {
             conn.tx = None;
         }
 
+        // Deliberately NOT sat out here: a reload is sub-second, and an
+        // instant sit-out left a sticky "(away)" flag that survived the
+        // reconnect. Absence only becomes game-visible when the player's turn
+        // timer expires while they're still disconnected
+        // ([`crate::flow::force_timeout_action`]).
         let game_in_progress =
-            if room.game_state.game_started && room.game_state.players.contains_key(&player_id) {
-                // Sit the player out so auto-check/fold kicks in (only if they
-                // aren't already sitting out).
-                if matches!(
-                    room.game_state.players.get(&player_id),
-                    Some(p) if !p.sitting_out
-                ) {
-                    room.game_state.set_sitting_out(player_id);
-                    crate::fanout::broadcast_state(&mut room, room_id);
-                }
-                true
-            } else {
-                false
-            };
+            room.game_state.game_started && room.game_state.players.contains_key(&player_id);
 
         if game_in_progress {
             // Hold the seat via a grace period so the player can reconnect
             // (reload / brief connectivity blip) while the game continues.
             //
             // While others are connected, use the full [`SESSION_GRACE_PERIOD`]
-            // — the game keeps running and the seat auto-checks/folds. When this
-            // was the *last* connected player, the full 5 minutes would block
+            // — the game keeps running; the seat's turns time out and
+            // auto-act. When this was the *last* connected player, the full
+            // 5 minutes would block
             // the room name (Create fails "already exists"), keep
             // `game_started` true (Join fails "game in progress"), and let
             // stale held seats resurface as duplicates on rejoin. A reload is
