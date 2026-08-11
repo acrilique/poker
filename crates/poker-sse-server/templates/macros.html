@@ -6,28 +6,28 @@
 <div class="card{% if small %} card-sm{% endif %} {% if card.red %}suit-red{% else %}suit-black{% endif %}"><span>{{ card.label }}</span></div>
 {%- endmacro %}
 
-{# `value` feeds an input `value` attribute; `placeholder` likewise. Shell
-   (pre-join, no room settings yet) passes neither. #}
-{% macro stack_field(value: Option<String> = None) -%}
+{# The settings fields are only rendered by the in-room controls panel, where
+   `value` always comes from the room's current `HostSettings`. #}
+{% macro stack_field(value: String) -%}
 <label class="field">
   <span>Initial stack</span>
-  <input type="number" min="1"{% if let Some(v) = value %} value="{{ v }}"{% endif %} data-bind:stackbbs>
+  <input type="number" min="1" value="{{ value }}" data-bind:stackbbs>
   <small>BBs per player</small>
 </label>
 {%- endmacro %}
 
-{% macro blind_interval_field(value: Option<String> = None, placeholder: Option<String> = None) -%}
+{% macro blind_interval_field(value: String) -%}
 <label class="field">
   <span>Blind interval</span>
-  <input type="number" min="0"{% if let Some(v) = value %} value="{{ v }}"{% endif %}{% if let Some(p) = placeholder %} placeholder="{{ p }}"{% endif %} data-bind:blindmins>
+  <input type="number" min="0" value="{{ value }}" data-bind:blindmins>
   <small>Minutes</small>
 </label>
 {%- endmacro %}
 
-{% macro blind_rise_field(value: Option<String> = None, placeholder: Option<String> = None) -%}
+{% macro blind_rise_field(value: String) -%}
 <label class="field">
   <span>Blind rise</span>
-  <input type="number" min="0"{% if let Some(v) = value %} value="{{ v }}"{% endif %}{% if let Some(p) = placeholder %} placeholder="{{ p }}"{% endif %} data-bind:blindpct>
+  <input type="number" min="0" value="{{ value }}" data-bind:blindpct>
   <small>Percent</small>
 </label>
 {%- endmacro %}

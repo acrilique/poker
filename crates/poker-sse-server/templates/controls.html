@@ -1,31 +1,20 @@
 {% import "macros.html" as ui %}
-{% if !game_started %}
-<div id="controls" class="lobby-panel">
+<div id="controls" class="{% if game_started %}controls-panel{% else %}lobby-panel{% endif %}">
+  {% if !game_started %}
   <div class="room-chip">Room: <span class="select-all">{{ room_id }}</span></div>
-  {% if host.is_host %}
-  <button class="btn btn-primary btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/start')">Start Game</button>
-  <details class="host-settings">
-    <summary>Edit settings</summary>
-    <div class="host-inputs">
-      {{ ui::stack_field(Some(settings.stack_bbs.clone())) }}
-      {{ ui::blind_interval_field(Some(settings.blind_mins.clone())) }}
-      {{ ui::blind_rise_field(Some(settings.blind_pct.clone())) }}
-      <button class="btn btn-elevated btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/update-settings')">Save settings</button>
-    </div>
-  </details>
-  {% else %}
-  <p class="waiting-text">Waiting for the host to start…</p>
   {% endif %}
-  <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
-</div>
-{% else %}
-<div id="controls" class="controls-panel">
   {% if host.is_host %}
+  {% if !game_started %}
+  <button class="btn btn-primary btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/start')">Start Game</button>
+  {% endif %}
   <details class="host-settings">
     <summary>Edit settings</summary>
     <div class="host-inputs">
-      {{ ui::blind_interval_field(Some(settings.blind_mins.clone())) }}
-      {{ ui::blind_rise_field(Some(settings.blind_pct.clone())) }}
+      {% if !game_started %}
+      {{ ui::stack_field(settings.stack_bbs) }}
+      {% endif %}
+      {{ ui::blind_interval_field(settings.blind_mins) }}
+      {{ ui::blind_rise_field(settings.blind_pct) }}
       <button class="btn btn-block {% if host.allow_late_entry %}btn-accent-soft{% else %}btn-elevated{% endif %}" data-on:click="el.classList.add('loading'); @post('/poker/action/toggle-late-entry')">
         Late Entry: {% if host.allow_late_entry %}ON{% else %}OFF{% endif %}
       </button>
@@ -35,10 +24,11 @@
       <button class="btn btn-elevated btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/update-settings')">Save settings</button>
     </div>
   </details>
+  {% elif !game_started %}
+  <p class="waiting-text">Waiting for the host to start…</p>
   {% endif %}
   {% if sitting_out %}
   <button class="btn btn-primary btn-block" data-on:click="el.classList.add('loading'); @post('/poker/action/sitin')">Sit In</button>
   {% endif %}
   <button class="btn btn-muted btn-block" data-on:click="pokerExit()">Exit Game</button>
 </div>
-{% endif %}

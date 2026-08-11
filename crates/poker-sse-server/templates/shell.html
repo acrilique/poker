@@ -41,14 +41,6 @@
               <input type="text" placeholder="room42" data-bind:roomid>
               <small>Alphanumeric, up to 19 characters</small>
             </label>
-            <details class="host-settings">
-              <summary>Host settings</summary>
-              <div class="host-inputs">
-                {{ ui::stack_field() }}
-                {{ ui::blind_interval_field(placeholder = Some("0".to_string())) }}
-                {{ ui::blind_rise_field(placeholder = Some("0".to_string())) }}
-              </div>
-            </details>
           </div>
           <div class="conn-buttons">
             <button class="btn btn-primary" data-on:click="el.classList.add('loading'); @post('/poker/room/create'); pokerSaveName($name)">Create Room</button>
