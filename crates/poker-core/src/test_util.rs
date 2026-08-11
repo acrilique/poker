@@ -43,9 +43,11 @@ pub fn make_board(flop: Option<[Card; 3]>, turn: Option<Card>, river: Option<Car
 
 /// Build a started `GameState` with `n_players` seated, dealt to `phase`.
 ///
-/// Mirrors the server's `handlers.rs::start_game` setup, then advances the
-/// engine phase by phase (forcing betting-complete) until the requested phase
-/// or `Showdown` is reached.
+/// Starts the game through [`GameState::try_start`] — the engine's single
+/// start path (validation, baseline freeze, first deal) — then advances the
+/// engine phase by phase until the requested phase or `Showdown` is reached.
+/// Requires `n_players >= 2`; `try_start` rejects fewer and the state would
+/// stay in the lobby.
 #[must_use]
 pub fn make_state(n_players: usize, phase: GamePhase) -> GameState {
     let mut gs = GameState::new();
@@ -55,19 +57,17 @@ pub fn make_state(n_players: usize, phase: GamePhase) -> GameState {
     for i in 1..=n_players {
         gs.add_player(format!("Player{i}"));
     }
-    // Mirror handlers.rs::start_game.
-    gs.game_started = true;
-    gs.starting_big_blind = gs.big_blind;
-    gs.starting_chips = gs.starting_bbs.saturating_mul(gs.big_blind);
-    gs.start_new_hand();
+    // The first seated player hosts, like `RoomManager::join_room`.
+    gs.host_id = 1;
+    // Fixtures always seat >= 2 players; a failed start would leave the
+    // state in the lobby and the caller's assertions visibly wrong.
+    let _ = gs.try_start(1);
 
     // Advance the engine to the requested phase.
     loop {
         if gs.phase == phase || matches!(gs.phase, GamePhase::Showdown) {
             break;
         }
-        // Force betting-complete so advance_phase is legal.
-        let _ = gs.is_betting_complete();
         gs.advance_phase();
     }
     gs
