@@ -487,17 +487,14 @@ impl GameState {
     }
 
     fn post_blind(&mut self, player_id: u32, amount: u32) {
-        if let Some(player) = self.players.get_mut(&player_id) {
-            let actual = amount.min(player.chips);
-            player.chips = player.chips.saturating_sub(actual);
-            player.current_bet = actual;
-            self.pot = self.pot.saturating_add(actual);
-            let entry = self.pot_contributions.entry(player_id).or_insert(0);
-            *entry = entry.saturating_add(actual);
-            if player.chips == 0 {
-                player.status = PlayerStatus::AllIn;
-            }
-        }
+        // A blind can only cover what the player has; the shortfall goes all-in.
+        let Some(player) = self.players.get(&player_id) else {
+            return;
+        };
+        let actual = amount.min(player.chips);
+        // Blinds are posted from a zeroed `current_bet` (see `start_new_hand`),
+        // so the shared add is equivalent to setting the bet.
+        self.place_bet(player_id, actual, 0);
     }
 
     /// Get the current player's ID.
@@ -1062,14 +1059,7 @@ impl GameState {
             }
             PlayerAction::Call => {
                 let call_amount = to_call.min(chips);
-                if let Some(p) = self.players.get_mut(&player_id) {
-                    p.chips = p.chips.saturating_sub(call_amount);
-                    p.current_bet = p.current_bet.saturating_add(call_amount);
-                    if p.chips == 0 {
-                        p.status = PlayerStatus::AllIn;
-                    }
-                }
-                self.add_to_pot(player_id, call_amount);
+                self.place_bet(player_id, call_amount, prev_current_bet);
             }
             PlayerAction::Raise => {
                 let raise_total = to_call.saturating_add(amount);
@@ -1087,18 +1077,7 @@ impl GameState {
                     });
                 }
 
-                let new_bet;
-                if let Some(p) = self.players.get_mut(&player_id) {
-                    p.chips = p.chips.saturating_sub(raise_total);
-                    p.current_bet = p.current_bet.saturating_add(raise_total);
-                    new_bet = p.current_bet;
-                    if p.chips == 0 {
-                        p.status = PlayerStatus::AllIn;
-                    }
-                } else {
-                    new_bet = prev_current_bet.saturating_add(raise_total);
-                }
-                self.add_to_pot(player_id, raise_total);
+                let new_bet = self.place_bet(player_id, raise_total, prev_current_bet);
                 let previous_current_bet = self.current_bet;
                 self.current_bet = new_bet;
                 // Only reopen betting (set last_raiser / bump min_raise) if this
@@ -1113,16 +1092,7 @@ impl GameState {
             }
             PlayerAction::AllIn => {
                 let all_in = chips;
-                let new_bet;
-                if let Some(p) = self.players.get_mut(&player_id) {
-                    p.chips = 0;
-                    p.current_bet = p.current_bet.saturating_add(all_in);
-                    new_bet = p.current_bet;
-                    p.status = PlayerStatus::AllIn;
-                } else {
-                    new_bet = prev_current_bet.saturating_add(all_in);
-                }
-                self.add_to_pot(player_id, all_in);
+                let new_bet = self.place_bet(player_id, all_in, prev_current_bet);
                 if new_bet > self.current_bet {
                     // Only reopen betting if the all-in constitutes a full legal
                     // raise. An all-in never raises the min_raise floor.
@@ -1140,9 +1110,32 @@ impl GameState {
         Ok(())
     }
 
+    /// Move `amount` chips from `player_id`'s stack into their current bet
+    /// and the pot ledger (via [`Self::add_to_pot`]), flipping them to
+    /// all-in if the stack empties. Returns the player's new `current_bet`.
+    ///
+    /// Shared by every betting arm in [`Self::apply_action`] and by
+    /// [`Self::post_blind`]. `prev_bet` is only consulted when the player is
+    /// somehow absent — callers pass the bet the player had before this
+    /// action so the fallback stays consistent.
+    fn place_bet(&mut self, player_id: u32, amount: u32, prev_bet: u32) -> u32 {
+        let new_bet = if let Some(p) = self.players.get_mut(&player_id) {
+            p.chips = p.chips.saturating_sub(amount);
+            p.current_bet = p.current_bet.saturating_add(amount);
+            if p.chips == 0 {
+                p.status = PlayerStatus::AllIn;
+            }
+            p.current_bet
+        } else {
+            prev_bet.saturating_add(amount)
+        };
+        self.add_to_pot(player_id, amount);
+        new_bet
+    }
+
     /// Add `amount` to the pot and record it against the player's contribution
     /// ledger (used later for side-pot calculation). Shared by every betting
-    /// arm in [`Self::apply_action`].
+    /// path via [`Self::place_bet`].
     fn add_to_pot(&mut self, player_id: u32, amount: u32) {
         self.pot = self.pot.saturating_add(amount);
         let entry = self.pot_contributions.entry(player_id).or_insert(0);
