@@ -1213,10 +1213,9 @@ fn test_blind_seat_queries_follow_dealer() {
     assert_eq!(gs.players.get(&host).unwrap().current_bet, gs.big_blind);
 }
 
-/// Heads-up the same offsets apply: the non-dealer seat posts the small
-/// blind and the dealer posts the big blind. (Note: standard heads-up
-/// convention assigns them the other way around — dealer posts the small
-/// blind. This test pins the engine's current rule.)
+/// Heads-up follows the standard convention: the dealer posts the small
+/// blind and acts first preflop; the other seat posts the big blind and
+/// keeps the option.
 #[test]
 fn test_blind_seat_queries_heads_up() {
     let mut gs = GameState::new();
@@ -1225,9 +1224,15 @@ fn test_blind_seat_queries_heads_up() {
     gs.host_id = host;
     gs.try_start(host).unwrap();
 
+    // player_order = [1, 2]; the first deal moves the button to seat 1.
     assert_eq!(gs.dealer_index, 1);
-    assert_eq!(gs.small_blind_seat(), Some(0));
-    assert_eq!(gs.big_blind_seat(), Some(1));
-    assert_eq!(gs.small_blind_id(), Some(host));
-    assert_eq!(gs.big_blind_id(), Some(p2));
+    assert_eq!(gs.small_blind_seat(), Some(1), "dealer seat posts the SB");
+    assert_eq!(gs.big_blind_seat(), Some(0), "non-dealer seat posts the BB");
+    assert_eq!(gs.small_blind_id(), Some(p2));
+    assert_eq!(gs.big_blind_id(), Some(host));
+    // The engine posted exactly those amounts from exactly those seats.
+    assert_eq!(gs.players.get(&p2).unwrap().current_bet, gs.small_blind);
+    assert_eq!(gs.players.get(&host).unwrap().current_bet, gs.big_blind);
+    // Dealer/SB acts first preflop.
+    assert_eq!(gs.current_player_id(), Some(p2));
 }

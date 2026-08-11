@@ -541,12 +541,20 @@ impl GameState {
         self.blind_seat(2)
     }
 
+    /// `offset` is seats clockwise of the button (1 = small blind, 2 = big
+    /// blind). Heads-up the button itself posts the small blind, so both
+    /// blinds shift one seat toward the dealer.
     const fn blind_seat(&self, offset: usize) -> Option<usize> {
         let seats = self.player_order.len();
         if seats < 2 {
             return None;
         }
-        Some(next_seat(self.dealer_index, offset, seats))
+        let heads_up_shift = if seats == 2 { 1 } else { 0 };
+        Some(next_seat(
+            self.dealer_index,
+            offset.saturating_sub(heads_up_shift),
+            seats,
+        ))
     }
 
     /// The player ID posting the small blind this hand, if seats are
