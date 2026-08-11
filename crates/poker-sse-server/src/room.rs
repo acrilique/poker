@@ -655,13 +655,7 @@ impl RoomManager {
                     .get(&player_id)
                     .is_some_and(|t| t.elapsed() >= grace)
                 {
-                    room.disconnected_at.remove(&player_id);
-                    if let Some(token) = room.player_sessions.remove(&player_id) {
-                        room.sessions.remove(&token);
-                    }
-                    room.players.remove(&player_id);
-                    room.game_state.remove_player(player_id);
-                    promote_host_if_needed(&mut room, &rid, player_id);
+                    remove_player_now(&mut room, &rid, player_id);
                     crate::fanout::broadcast_state(&mut room, &rid);
                     tracing::info!(
                         room = %rid,
@@ -709,10 +703,13 @@ async fn remove_room_if_empty(rooms: &Arc<Rooms>, room_id: &str) {
 /// Permanently remove a player from the room: clears session maps, drops the
 /// connection state, removes them from game state, and promotes a new host if
 /// they were it. Does **not** broadcast — callers render state once after any
-/// batch of removals. Safe to call regardless of whether a game is in progress;
-/// note that mid-hand removal shifts `player_order` indices, so prefer the
-/// hand-boundary sweep in [`RoomManager::leave_room`] / `maybe_start_new_hand`
-/// during a live hand.
+/// batch of removals. This is the single permanent-removal path: both the
+/// immediate lobby teardown in [`RoomManager::disconnect_player`] /
+/// [`RoomManager::leave_room`] and the grace-period expiry in
+/// [`RoomManager::start_grace_period`] funnel through here. Safe to call
+/// regardless of whether a game is in progress; note that mid-hand removal
+/// shifts `player_order` indices, so prefer the hand-boundary sweep in
+/// [`RoomManager::leave_room`] / `maybe_start_new_hand` during a live hand.
 pub(crate) fn remove_player_now(room: &mut Room, room_id: &str, player_id: u32) {
     if let Some(token) = room.player_sessions.remove(&player_id) {
         room.sessions.remove(&token);
